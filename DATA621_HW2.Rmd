@@ -1,14 +1,11 @@
 ---
 title: "DATA621_HW2"
-author: "Gabriel Santos"
-date: '2023-02-24'
-output:
-  word_document: default
-  pdf_document: default
-  html_document: default
+author: "Critical group 2: Avery Davidowitz, Josh Iden, Mathew Katz, Tyler Brown, Gabriel Santos, John Ledesma "
+date: "2023-03-11"
+output: html_document
 ---
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(tidyr);
 library(dplyr); 
 library(kableExtra);
@@ -16,6 +13,17 @@ library(ggplot2)
 library(caret)
 library(pROC)
 ```
+
+
+#### Introduction HW2
+
+We have a dataset called "classification-output-data.csv", which has a set of independent variables and a class, along with a predictive classification model with scored probability and a scored class based on scored probability. We have to use the following 3 key columns to derive some key metrics from the ranking model.
+
+- class: the actual class for the observation
+- scored.class: the predicted class for the observation (based on a threshold of 0.5)
+- scored.probability: the predicted probability of success for the observation
+
+Finally, a graph will be created and we can evaluate the models.
 
 #### 1.Download the classification output data set (attached in Blackboard to the assignment).
 
@@ -45,6 +53,8 @@ the output. In particular, do the rows represent the actual or predicted class? 
 ```{r}
 table(class_data$class, class_data$scored.class)
 ```
+We get the column of actual class and the column of the predicted class for the observation.
+
 
 
 #### 3.Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the accuracy of the predictions.
@@ -70,6 +80,7 @@ accuracy <- function(df) {
 }
 accuracy(class_data)
 ```
+The accuracy is: 0.807
 
 #### 4.Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the classification error rate of the predictions.
 
@@ -94,6 +105,9 @@ classification_error <- function(df) {
 classification_error(class_data)
 ```
 
+The Classification error date is 0.193
+
+
 #### 5.Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the precision of the predictions.
 
 $$
@@ -116,6 +130,9 @@ precision <- function(df) {
 }
 precision(class_data)
 ```
+The precision es 0.844
+
+
 
 #### 6. Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the sensitivity of the predictions. Sensitivity is also known as recall.
 
@@ -139,6 +156,8 @@ sensitivity <- function(df) {
 sensitivity(class_data)
 ```
 
+The sensitivity is 0.474
+
 #### 7.Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the specificity of the predictions.
 
 $$
@@ -161,6 +180,10 @@ specificity <- function(df) {
 }
 specificity(class_data)
 ```
+
+The specificity is 0.96
+
+
 
 #### 8.Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the F1 score of the predictions.
 
@@ -186,6 +209,9 @@ f_one_score <- function(df) {
 }
 f_one_score(class_data)
 ```
+
+The F1 score is 0.607
+
 
 #### 9.Before we move on, let's consider a question that was asked: What are the bounds on the F1 score? Show that the F1 score will always be between 0 and 1. (Hint: If 0 < 𝑎 < 1 and 0 < 𝑏 < 1 then 𝑎𝑏 < 𝑎.)
 
@@ -214,6 +240,9 @@ roc_curve <- function(labels, scores) {
 }
 roc_curve(class_data$class, class_data$scored.class)
 ```
+
+ROC (Receiver Operating Characteristic ) Analysis is a useful way to assess the accuracy of model predictions by plotting the sensitivity versus specificity of a classification test.
+
 
 #### 11.Use your created R functions and the provided classification output data set to produce all of the classification metrics discussed above.
 
