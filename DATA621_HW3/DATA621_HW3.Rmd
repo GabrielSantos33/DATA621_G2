@@ -1,0 +1,114 @@
+---
+title: "Homework 3: Logistic Regression"
+author: Avery Davidowitz, Gabriel Santos, John Ledesma, Josh Iden, Mathew Katz, Tyler
+  Brown
+date: "2023-03-17"
+output: pdf_document
+---
+
+## Objective
+
+Your objective is to build a binary logistic regression model on the training data set to predict whether
+the neighborhood will be at risk for high crime levels. You will provide classifications and probabilities
+for the evaluation data set using your binary logistic regression model. You can only use the variables
+given to you (or, variables that you derive from the variables provided).  
+
+## Data Exploration
+
+#### Describe the size and the variables in the crime training data set. Consider that too much detail will cause a manager to lose interest while too little detail will make the manager consider that you aren’t doing your job. Some suggestions are given below. Please do NOT treat this as a check list of things to do to complete the assignment. You should have your own thoughts on what to tell the boss.
+
+### Load the Data
+
+Loading the training data provided, there are a total of 13 variables with 466 records relevant to crime for various neighborhoods of a major city.
+
+```{r, echo=FALSE}
+df = read.csv("https://raw.githubusercontent.com/AlphaCurse/DATA621/main/crime-training-data_modified.csv")
+head(df)
+dim(df)
+```
+
+Below is a short description of
+the variables of interest in the data set:
+• zn: proportion of residential land zoned for large lots (over 25000 square feet) (predictor variable)
+• indus: proportion of non-retail business acres per suburb (predictor variable)
+• chas: a dummy var. for whether the suburb borders the Charles River (1) or not (0) (predictor variable)
+• nox: nitrogen oxides concentration (parts per 10 million) (predictor variable)
+• rm: average number of rooms per dwelling (predictor variable)
+• age: proportion of owner-occupied units built prior to 1940 (predictor variable)
+• dis: weighted mean of distances to five Boston employment centers (predictor variable)
+• rad: index of accessibility to radial highways (predictor variable)
+• tax: full-value property-tax rate per $10,000 (predictor variable)
+• ptratio: pupil-teacher ratio by town (predictor variable)
+• lstat: lower status of the population (percent) (predictor variable)
+• medv: median value of owner-occupied homes in $1000s (predictor variable)
+• target: whether the crime rate is above the median crime rate (1) or not (0) (response variable)
+
+We can see the minimum value, 1st and 3rd quantile, median value, average value (mean), and the maximum value for each variable.
+```{r, echo=FALSE}
+summary(df)
+```
+
+There are no missing values within this dataset as shown below.
+```{r, echo=FALSE}
+colSums(is.na(df))
+```
+
+### Data Visualization
+
+Here are boxplots of a few variables in the data set. As we can see, the median, upper quartile, lower quartile, upper whisker, lower whisker, and outliers can be determined based on the plots.
+
+```{r, echo=FALSE}
+library(tidyverse)
+
+plot_df = pivot_longer(df, c("zn","indus","chas","nox","rm","age","dis","rad","lstat"))
+
+ggplot(plot_df, aes(x=value, fill=name)) +
+  geom_boxplot()
+```
+
+Additionally, we can use a barplot to determine the count of each value for each variable. We can identify 'rm' is normally distributed. Additionally, we can see 'indus' and 'rad' are facing a bi-modal distribution. All other variables have skewness to their values.
+```{r, echo=FALSE}
+ggplot(plot_df, aes(value)) +
+  geom_histogram(bins = 5) +
+  facet_wrap(~name, scales='free_x')
+```
+
+
+Let's determine the correlation of our target variable with each remaining variable, where values range from -1 (negative linear correlation) and 1 (positive linear correlation).
+```{r, echo=FALSE}
+cor(df[ ,colnames(df) != "target"],
+    df$target)
+```
+
+## Data Preparation
+
+#### Describe how you have transformed the data by changing the original variables or creating new variables. If you did transform the data or create new variables, discuss why you did this. Here are some possible transformations.
+
+There are no missing values that needs correcting in this dataset. Some of the variables are skewed, which we will use log transformation on "age", "lstat", "rad", and "nox" to reduce this.
+
+```{r, echo=FALSE}
+df$age = log(df$age)
+df$lstat = log(df$lstat)
+df$rad = log(df$rad)
+df$nox = log(df$nox)
+
+plot_df = pivot_longer(df, c("age","lstat","rad","nox"))
+ggplot(plot_df, aes(value)) +
+  geom_histogram(bins = 5) +
+  facet_wrap(~name, scales='free_x')
+```
+
+## Build Models
+
+#### Using the training data, build at least three different binary logistic regression models, using different variables (or the same variables with different transformations). You may select the variables manually, use an approach such as Forward or Stepwise, use a different approach, or use a combination of techniques. Describe the techniques you used. If you manually selected a variable for inclusion into the model or exclusion into the model, indicate why this was done. 
+
+In the first model, we are using all variables. As we can see, the "nox", "rad", "dis", "ptratio", and "tax" variables have significant p-values. 
+```{r, echo=FALSE}
+log_reg1 = glm(target~., family="binomial", data=df)
+summary(log_reg1)
+```
+
+```{r, echo=FALSE}
+
+```
+
