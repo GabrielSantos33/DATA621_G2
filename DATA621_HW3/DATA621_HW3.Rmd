@@ -1,25 +1,63 @@
 ---
-title: "Homework 3: Logistic Regression"
+title: 'Homework 3: Logistic Regression'
 author: Avery Davidowitz, Gabriel Santos, John Ledesma, Josh Iden, Mathew Katz, Tyler
   Brown
-date: "2023-03-17"
-output: pdf_document
+date: "2023-03-22"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
 ---
 
-## Objective
+### Objective
 
-Your objective is to build a binary logistic regression model on the training data set to predict whether
-the neighborhood will be at risk for high crime levels. You will provide classifications and probabilities
-for the evaluation data set using your binary logistic regression model. You can only use the variables
-given to you (or, variables that you derive from the variables provided).  
+Your objective is to build a binary logistic regression model on the training data set to predict whether the neighborhood will be at risk for high crime levels. You will provide classifications and probabilities for the evaluation data set using your binary logistic regression model. You can only use the variables given to you (or, variables that you derive from the variables provided).  
 
-## Data Exploration
+### Introduction
+
+One of the biggest concerns in large cities is crime.
+For this assignment we have a data set for a large city (Boston) and we will build a model to identify regions that might have lower or higher crime according to the average. This task will use a binary logistic regression.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, echo=FALSE}
+library(mixtools)
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(RColorBrewer)
+library(MASS)
+library(dplyr)
+library(forecast)
+library(rpart.plot)
+library(reshape2)
+library(gridExtra)
+library(ggfortify)
+library(fpp2)
+library(fma)
+library(kableExtra)
+library(ggcorrplot)
+library(tibble)
+library(tidyr)
+library(tidyverse)
+library(tidymodels)
+library(ggpmisc)
+library(regclass)
+library(pROC)
+```
+
+
+
+### 1.Data Exploration
 
 #### Describe the size and the variables in the crime training data set. Consider that too much detail will cause a manager to lose interest while too little detail will make the manager consider that you aren’t doing your job. Some suggestions are given below. Please do NOT treat this as a check list of things to do to complete the assignment. You should have your own thoughts on what to tell the boss.
 
 ### Load the Data
 
-Loading the training data provided, there are a total of 13 variables with 466 records relevant to crime for various neighborhoods of a major city.
+Loading the training data provided, there are a total of 13 variables with 466 records relevant to crime for various neighborhoods of a major city (Boston).
 
 ```{r, echo=FALSE}
 df = read.csv("https://raw.githubusercontent.com/AlphaCurse/DATA621/main/crime-training-data_modified.csv")
@@ -44,14 +82,19 @@ the variables of interest in the data set:
 • target: whether the crime rate is above the median crime rate (1) or not (0) (response variable)
 
 We can see the minimum value, 1st and 3rd quantile, median value, average value (mean), and the maximum value for each variable.
+
 ```{r, echo=FALSE}
 summary(df)
 ```
 
 There are no missing values within this dataset as shown below.
+Based on the summary statistics, it appears that we have some highly skewed features, as many features have means that are far from the median, indicating a skewed distribution, for example the variable 'zn and 'chas'.
+
 ```{r, echo=FALSE}
 colSums(is.na(df))
 ```
+
+
 
 ### Data Visualization
 
@@ -59,14 +102,20 @@ Here are boxplots of a few variables in the data set. As we can see, the median,
 
 ```{r, echo=FALSE}
 library(tidyverse)
-
 plot_df = pivot_longer(df, c("zn","indus","chas","nox","rm","age","dis","rad","lstat"))
-
 ggplot(plot_df, aes(x=value, fill=name)) +
   geom_boxplot()
 ```
 
+We generated scatterplots of each variable versus the target variable to get an idea of the relationship between them. Plot scatter plots of each variable versus the target variable:
+
+```{r, fig.height = 10, fig.width = 10}
+featurePlot(df[,1:ncol(df)-1], df[,ncol(df)], pch = 20)
+```
+
 Additionally, we can use a barplot to determine the count of each value for each variable. We can identify 'rm' is normally distributed. Additionally, we can see 'indus' and 'rad' are facing a bi-modal distribution. All other variables have skewness to their values.
+
+
 ```{r, echo=FALSE}
 ggplot(plot_df, aes(value)) +
   geom_histogram(bins = 5) +
@@ -74,13 +123,79 @@ ggplot(plot_df, aes(value)) +
 ```
 
 
+Next, we visualize the distribution profiles for each of the predictor variables.
+This will help us make a plan for which variable to include, how they might be related to each other or to the target, and finally identify outliers or transformations that might help improve model resolution.
+
+
+```{r, fig.height = 8, fig.width = 8, echo=FALSE}
+
+gather_df <- df %>% dplyr::select(-target) %>%
+  gather(key = 'variable', value = 'value')
+
+ggplot(gather_df) + 
+  geom_histogram(aes(x=value, y = ..density..), bins=30) + 
+  geom_density(aes(x=value), color='blue') +
+  facet_wrap(. ~variable, scales='free', ncol=3)
+```
+
+The distribution profiles show the prevalence of kurtosis, specifically the right bias in the variables 'dis', 'lstat', 'nox', 'rm', zn', and the left bias in 'age' and 'ptratio'.
+These deviations from a traditional normal distribution can be problematic for linear regression assumptions, and therefore we may need to transform the data.
+The bimodal data suggests that there are possibly two different groups or classes within the entity.
+
+
+
 Let's determine the correlation of our target variable with each remaining variable, where values range from -1 (negative linear correlation) and 1 (positive linear correlation).
+
+
 ```{r, echo=FALSE}
 cor(df[ ,colnames(df) != "target"],
     df$target)
 ```
 
-## Data Preparation
+We use the mixtools package that helps mixed model regression where the data can be subdivided into groups.
+We apply them to the variable 'indus', calculate mixed distributions for Indus and Simple plot to illustrate possible bi modal mix of groups:
+
+
+```{r, echo=FALSE}
+df_mix <- df %>% 
+  dplyr::select(indus)
+
+indus_so_mix <- normalmixEM(df_mix$indus, 
+                            lambda = .5, 
+                            mu = c(5, 20), 
+                            sigma = 1, 
+                            maxit=60)
+
+plot(indus_so_mix, 
+     whichplots = 2,
+     density = TRUE, 
+     main2 = "indus - Possible Distributions", 
+     xlab2 = "indus")
+```
+
+Based on the meanings of the features and the information provided, there is no reason to believe that any of these outliers are errors, data errors, or are unexplained.
+
+As such, we won't remove outliers, as they represent valuable data and could predict the target.
+
+
+### Multicollinearity
+
+One problem that can occur with multi-variable regression is a correlation between variables, called Multicollinearity.
+We perform a correlation test between variables.
+
+```{r, echo=FALSE}
+clean_df <- df
+correlation = cor(clean_df, use = 'pairwise.complete.obs')
+corrplot(correlation, 'ellipse', type = 'lower', order = 'hclust',
+         col=brewer.pal(n=8, name="Spectral"))
+```
+
+According to the graph we can see that there are highly correlated variables such as 'nox' and 'indus', a correlation of 0.75 and 1.
+There is also a high correlation between 'tax' and 'rad'.
+
+
+
+### 2.Data Preparation
 
 #### Describe how you have transformed the data by changing the original variables or creating new variables. If you did transform the data or create new variables, discuss why you did this. Here are some possible transformations.
 
@@ -91,24 +206,412 @@ df$age = log(df$age)
 df$lstat = log(df$lstat)
 df$rad = log(df$rad)
 df$nox = log(df$nox)
-
 plot_df = pivot_longer(df, c("age","lstat","rad","nox"))
 ggplot(plot_df, aes(value)) +
   geom_histogram(bins = 5) +
   facet_wrap(~name, scales='free_x')
 ```
 
-## Build Models
+### Transform non-normal variables
+
+We can see that some of our variables are highly skewed.We decided to perform some transformations to make them more normally distributed.We can see the changes in the distributions before and after the transformations:
+
+Created empty data frame to store transformed variables and performed boxcox transformation after identifying proper lambda:
+
+```{r paged.print=FALSE,  include=FALSE, echo=FALSE}
+residPlot <- function(model) {
+  
+  if (is.null(model)) {
+    return
+  }
+  
+  layout(matrix(c(1,1,2,3), 2, 2, byrow = TRUE))
+  plot(residuals(model))
+  hist(model[["residuals"]], freq = FALSE, breaks = "fd", main = "Residual Histogram",
+       xlab = "Residuals",col="lightgreen")
+  lines(density(model[["residuals"]], kernel = "ep"),col="blue", lwd=3)
+  curve(dnorm(x,mean=mean(model[["residuals"]]), sd=sd(model[["residuals"]])), col="red", lwd=3, lty="dotted", add=T)
+  qqnorm(model[["residuals"]], main = "Residual Q-Q plot")
+  qqline(model[["residuals"]],col="red", lwd=3, lty="dotted")
+  par(mfrow = c(1, 1))
+}
+```
+
+```{r paged.print=FALSE,  include=FALSE, echo=FALSE}
+variableImportancePlot <- function(model=NULL, chart_title='Variable Importance Plot') {
+  
+  if (is.null(model)) {
+    return
+  }
+  
+  varImp(model) %>% as.data.frame() %>% 
+    ggplot(aes(x = reorder(rownames(.), desc(Overall)), y = Overall)) +
+    geom_col(aes(fill = Overall)) +
+    theme(panel.background = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_text(angle = 90)) +
+    scale_fill_gradient() +
+    labs(title = chart_title,
+         x = "Parameter",
+         y = "Relative Importance")
+}
+
+histbox <- function(df, box) {
+    par(mfrow = box)
+    ndf <- dimnames(df)[[2]]
+    
+    for (i in seq_along(ndf)) {
+            data <- na.omit(unlist(df[, i]))
+            hist(data, breaks = "fd", main = paste("Histogram of", ndf[i]),
+                 xlab = ndf[i], freq = FALSE)
+            lines(density(data, kernel = "ep"), col = 'red')
+    }
+    
+    par(mfrow = c(1, 1))
+}
+```
+
+```{r paged.print=FALSE,  include=FALSE}
+model_performance_extraction <- function(model=NULL) {
+  
+  if (is.null(model)) {
+    return
+  }
+  
+  data.frame("RSE" = model$sigma,
+             "Adj R2" = model$adj.r.squared,
+             "F-Statistic" = model$fstatistic[1])
+}
+
+round_lambda <- function(series) {
+  lambda <- BoxCox.lambda(series)
+  
+  if ((lambda > 0.25) & (lambda < 0.75)) {
+    new_lambda <- 0.5
+  } else if ((lambda > -0.75) & (lambda < -0.25)) {
+    new_lambda <- -0.5
+  } else {
+    new_lambda <- round(lambda)
+  }
+  print(paste('lambda:', lambda, ',  rounded lambda:', new_lambda))
+  
+  return(new_lambda)
+}
+```
+
+```{r, fig.height=12, fig.width=10, message=FALSE, warning=FALSE, echo=FALSE}
+
+df_temp <- data.frame(matrix(ncol = 1, nrow = length(clean_df$target)))
+df_temp$rm <- clean_df$rm
+rm_lambda <- BoxCox.lambda(clean_df$rm)
+df_temp$rm_transform <- BoxCox(clean_df$rm, rm_lambda)
+df_temp$nox <- clean_df$nox
+nox_lambda <- BoxCox.lambda(clean_df$nox)
+df_temp$nox_transform <- BoxCox(clean_df$nox, nox_lambda)
+df_temp$dis <- clean_df$dis
+df_temp$dis_transform <- log(clean_df$dis)
+df_temp$zn <- clean_df$zn
+df_temp$zn_transform <- log(clean_df$zn+1)
+df_temp$lstat <- clean_df$lstat
+df_temp$lstat_transform <- log(clean_df$lstat)
+df_temp$age <- clean_df$age
+df_temp$age_transform <- log(max(clean_df$age) + 1 - clean_df$age)
+df_temp$ptratio <- clean_df$ptratio
+df_temp$ptratio_transform <- log(max(clean_df$ptratio) + 1 - clean_df$ptratio)
+df_temp <- df_temp[, 2:15]
+histbox(df_temp, c(8, 2))
+```
+
+
+Build clean dataframe with transformation:
+
+```{r, echo=FALSE}
+clean_df <- data.frame(cbind(clean_df, 
+                        rm_transform = df_temp$rm_transform,
+                        nox_transform = df_temp$nox_transform,
+                        dis_transform = df_temp$dis_transform,
+                        zn_transform = df_temp$zn_transform,
+                        lstat_transform = df_temp$lstat_transform,
+                        age_transform = df_temp$age_transform,
+                        ptratio_transform = df_temp$ptratio_transform
+                        ))
+is.na(clean_df) <- sapply(clean_df, is.infinite)
+```
+
+### 3.Build Models
 
 #### Using the training data, build at least three different binary logistic regression models, using different variables (or the same variables with different transformations). You may select the variables manually, use an approach such as Forward or Stepwise, use a different approach, or use a combination of techniques. Describe the techniques you used. If you manually selected a variable for inclusion into the model or exclusion into the model, indicate why this was done. 
 
-In the first model, we are using all variables. As we can see, the "nox", "rad", "dis", "ptratio", and "tax" variables have significant p-values. 
+In the first model, we are using all variables. As we can see, the "nox", "rad", "dis", "ptratio", and "tax" variables have significant p-values.
+
 ```{r, echo=FALSE}
 log_reg1 = glm(target~., family="binomial", data=df)
 summary(log_reg1)
 ```
 
-```{r, echo=FALSE}
+We decided to split our cleaned dataset into a training and testing set (80% training, 20% testing). Lo hicimos porque the evaluation dataset doesn't provide 'target' values so we cannot measure our model performance against that dataset.  
 
+We use the same data set for all models:
+
+```{r, echo=FALSE}
+set.seed(2023)
+cleaneddfTrain <- createDataPartition(clean_df$target, p=0.8, list=FALSE)
+cleaneddftraining <- clean_df[cleaneddfTrain,]
+cleaneddftesting <- clean_df[-cleaneddfTrain,]
 ```
 
+#### Model 1 - Raw Features
+
+Using our training dataset, we decided to run a binary logistic regression model that included all non-transformed features that we hadn't removed following our data cleaning process. 
+
+```{r, echo=FALSE}
+model1 <- glm(target ~ zn + indus + chas + nox + rm + age + dis + rad + tax + ptratio + lstat + medv, data = cleaneddftraining , family = binomial)
+summary(model1)
+```
+
+We also calculated 'VIF scores' to measure the effects of collinearity.  as well as variable importance:
+
+Print variable inflation factor score:
+
+
+```{r fig.height=5, fig.width=8, echo=FALSE}
+print('VIF scores of predictors')
+VIF(model1)
+variableImportancePlot(model1)
+```
+
+
+#### Model 2 - Transformed Features
+
+Using the transformed functions we create model 2.
+
+```{r, echo=FALSE}
+model2 <- glm(target ~ zn_transform + indus + chas + nox_transform + rm_transform + age_transform + dis_transform + rad + tax + ptratio_transform + lstat_transform + medv, data = cleaneddftraining , family = binomial)
+summary(model2)
+```
+
+We also calculated 'VIF scores' to measure the effects of collinearity as well as variable importance:
+
+Print variable inflation factor score:
+
+
+```{r fig.height=5, fig.width=8, echo=FALSE}
+print('VIF scores of predictors')
+VIF(model2)
+variableImportancePlot(model2)
+```
+
+#### Model 3 - Stepwise-AIC on Model 1
+
+The model 3, we used a 'stepwise AIC' on Model non-transformed features (model 1) to choose which features are most relevant.
+
+```{r, warning=FALSE, echo=FALSE}
+model3 <- model1 %>% stepAIC(trace = FALSE)
+summary(model3)
+```
+
+We also calculated 'VIF scores' to measure the effects of collinearity as well as variable importance:
+
+Print variable inflation factor score:
+
+```{r fig.height=5, fig.width=5, echo=FALSE}
+print('VIF scores of predictors')
+VIF(model3)
+variableImportancePlot(model3)
+```
+
+#### Model 4 -Stepwise-AIC on Model 2
+
+In our final model, we applied 'stepwise AIC' on Model with transformed features (model 2) to choose which features are most relevant.
+
+```{r, warning=FALSE, echo=FALSE}
+model4 <- model2 %>% stepAIC(trace = FALSE)
+summary(model4)
+```
+
+We also calculated 'VIF scores' to measure the effects of collinearity as well as variable importance:
+
+Print variable inflation factor score:
+
+```{r fig.height=5, fig.width=8, echo=FALSE}
+print('VIF scores of predictors')
+VIF(model4)
+variableImportancePlot(model4)
+```
+
+### Analizing our model coefficients  
+
+Some outputs from our models indicated coefficient values that were different from those expected.
+
+In model 1, these variables indicated positive values for coefficients that we'd expect to be negative:
+
+- Age: we think that the higher the age, the crime rate would be lower.
+
+- dis: we think that the greater the weighted average value of the distance to five employment centers, the lower the crime rate.
+
+- medv: we think that the higher the median value of owner-occupied homes by $1000s, the lower crime rate will result.
+
+
+Model 3 and Model 4 fit better. In model 1 and model 2 we can attribute this phenomenon to multicollinearity.We were able to initially observe that some variables in the data set were highly correlated with each other. It is possible that the high correlation is increasing the variance of the estimates of the coefficients, they are changing the result from positive to negative.We can check the result by our variance inflation factor (VIF) tests, which showed high values for functions like 'medv' and 'rn'.
+
+In model 3 and model 4, we make sure to take this into account to better manage our coefficients and reduce multicollinearity; Primarily, we removed certain variables that had high VIF scores through our stepwise - selection process.
+
+
+### 4.Select Models
+
+#### For the binary logistic regression model, will you use a metric such as log likelihood, AIC, ROC curve, etc.? Using the training data set, evaluate the binary logistic regression model based on (a) accuracy, (b) classification error rate, (c) precision, (d) sensitivity, (e) specificity, (f) F1 score, (g) AUC, and (h) confusion matrix. Make predictions using the evaluation data set. 
+
+#### Model 1 - confusion matrix
+
+```{r, echo=FALSE}
+model1_glm_pred = ifelse(predict(model1, type = "link") > 0.5, "Yes", "No")
+cleaneddftesting$model1 <- ifelse(predict.glm(model1, cleaneddftesting, "response") >= 0.5, 1, 0)
+cm1 <- confusionMatrix(factor(cleaneddftesting$model1), factor(cleaneddftesting$target), "1")
+results <- tibble(Model = "Model #1", Accuracy=cm1$byClass[11], F1 = cm1$byClass[7],
+                  Deviance= model1$deviance, 
+                  R2 = 1 - model1$deviance / model1$null.deviance,
+                  AIC= model1$aic)
+cm1
+```
+
+#### Model 2 - confusion matrix
+
+```{r, echo=FALSE}
+model2_glm_pred = ifelse(predict(model2, type = "link") > 0.5, "Yes", "No")
+cleaneddftesting$model2 <- ifelse(predict.glm(model2, cleaneddftesting, "response") >= 0.5, 1, 0)
+cm2 <- confusionMatrix(factor(cleaneddftesting$model2), factor(cleaneddftesting$target), "1")
+results <- rbind(results, tibble(Model = "Model #2", Accuracy=cm2$byClass[11], F1 = cm2$byClass[7],
+                  Deviance= model2$deviance, 
+                  R2 = 1 - model2$deviance / model2$null.deviance,
+                  AIC= model2$aic))
+cm2
+```
+#### Model 3 - confusion matrix
+
+```{r, echo=FALSE}
+model3_glm_pred = ifelse(predict(model3, type = "link") > 0.5, "Yes", "No")
+cleaneddftesting$model3 <- ifelse(predict.glm(model3, cleaneddftesting,"response") >= 0.5, 1, 0)
+cm3 <- confusionMatrix(factor(cleaneddftesting$model3), factor(cleaneddftesting$target), "1")
+results <- rbind(results, tibble(Model = "Model #3", Accuracy=cm3$byClass[11], F1 = cm3$byClass[7],
+                  Deviance=model3$deviance, 
+                  R2 = 1 - model3$deviance / model3$null.deviance,
+                  AIC=model3$aic))
+cm3
+```
+#### Model 4 - confusion matrix
+
+```{r, echo=FALSE}
+model4_glm_pred = ifelse(predict(model4, type = "link") > 0.5, "Yes", "No")
+cleaneddftesting$model4 <- ifelse(predict.glm(model4, cleaneddftesting,"response") >= 0.5, 1, 0)
+cm4 <- confusionMatrix(factor(cleaneddftesting$model4), factor(cleaneddftesting$target), "1")
+results <- rbind(results, tibble(Model = "Model #4", Accuracy=cm4$byClass[11], F1 = cm4$byClass[7],
+                  Deviance=model4$deviance, 
+                  R2 = 1 - model4$deviance / model4$null.deviance,
+                  AIC=model4$aic))
+cm4
+```
+
+#### ROC Curves
+
+A comparison of ROC Curves for each model:
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+# par(pty = "s")
+print('Model 1 - ROC Curve')
+roc(cleaneddftesting[["target"]], cleaneddftesting[["model1"]], plot = TRUE, legacy.axes = TRUE, print.auc = TRUE)
+print('Model 2 - ROC Curve')
+roc(cleaneddftesting[["target"]], cleaneddftesting[["model2"]], plot = TRUE, legacy.axes = TRUE, print.auc = TRUE)
+print('Model 3 - ROC Curve')
+roc(cleaneddftesting[["target"]], cleaneddftesting[["model3"]], plot = TRUE, legacy.axes = TRUE, print.auc = TRUE)
+print('Model 4 - ROC Curve')
+roc(cleaneddftesting[["target"]], cleaneddftesting[["model4"]], plot = TRUE, legacy.axes = TRUE, print.auc = TRUE)
+```
+
+
+
+#### Model Performance Summary
+
+The following table shows each of the performance metrics for each model in the training data set. We can see that there is a slight improvement in model performance after applying transformations and selecting meaningful parameters:
+
+
+```{r, echo=FALSE}
+kable(results) %>% 
+  kable_styling(bootstrap_options = "basic", position = "center")
+```
+
+#### Analysis
+
+- Model 4 (optimized model stepwise AIC) was the model that had the highest accuracy and F1.
+- Model 2 (model that applied transformations to the data) had the highest R2 and the lowest deviance
+- Model 4 (optimized model stepwise AIC) had the lowest AIC.
+
+When making the comparison between the models we can observe:
+
+Model 2 has better quality, fit, and more accuracy than Model 1, as Model 2 has higher accuracy and better F1, and lower drift and AIC and higher R2.
+
+Model 1 is more accurate than model 3. The deviation of model 1 is lower than model 3 and model 1 has a higher R2 than model 3.Model 3 has a lower AIC than model 1, this is because it is an optimized model. 
+
+Model 4 has a higher accuracy, F1 t and deviance than model 2.Model 4 has lower R2 and AIC than model 2, because it is an optimized model.
+
+Model 4 compared to model 3 has better accuracy, F1.Its behavior is similar to model 2 vs model 1.
+
+According to the results in conclusion, model 4 is the one with the highest quality, accuracy and with a low deviation. It also has the lowest AIC.
+
+
+#### Selected model - model 4
+
+We chose the model 4, because it is the model with the best quality:
+
+Created empty data frame to store transformed variables and performed boxcox transformation after identifying proper lambda:
+
+```{r, echo=FALSE}
+df_eval <- read.csv("https://raw.githubusercontent.com/GabrielSantos33/DATA621_HW3/main/crime-evaluation-data_modified.csv")
+```
+
+```{r, echo=FALSE}
+df_temp_eval <- data.frame(matrix(ncol = 1, nrow = length(df_eval$medv)))
+df_temp_eval$rm <- df_eval$rm
+rm_lambda <- BoxCox.lambda(df_eval$rm)
+df_temp_eval$rm_transform <- BoxCox(df_eval$rm, rm_lambda)
+df_temp_eval$nox <- df_eval$nox
+nox_lambda <- BoxCox.lambda(df_eval$nox)
+df_temp_eval$nox_transform <- BoxCox(df_eval$nox, nox_lambda)
+df_temp_eval$dis <- df_eval$dis
+df_temp_eval$dis_transform <- log(df_eval$dis)
+df_temp_eval$zn <- df_eval$zn
+df_temp_eval$zn_transform <- log(df_eval$zn+1)
+df_temp_eval$lstat <- df_eval$lstat
+df_temp_eval$lstat_transform <- log(df_eval$lstat)
+df_temp_eval$age <- df_eval$age
+df_temp_eval$age_transform <- log(max(df_eval$age) + 1 - df_eval$age)
+df_temp_eval$ptratio <- df_eval$ptratio
+df_temp_eval$ptratio_transform <- log(max(df_eval$ptratio) + 1 - df_eval$ptratio)
+df_temp_eval <- df_temp_eval[, 2:15]
+```
+
+Build clean dataframe with transformation:
+
+```{r, echo=FALSE}
+df_eval <- data.frame(cbind(df_eval, 
+                        rm_transform = df_temp_eval$rm_transform,
+                        nox_transform = df_temp_eval$nox_transform,
+                        dis_transform = df_temp_eval$dis_transform,
+                        zn_transform = df_temp_eval$zn_transform,
+                        lstat_transform = df_temp_eval$lstat_transform,
+                        age_transform = df_temp_eval$age_transform,
+                        ptratio_transform = df_temp_eval$ptratio_transform
+                        ))
+is.na(df_eval) <- sapply(df_eval, is.infinite)
+```
+
+
+```{r, echo=FALSE}
+eval_data <- df_eval %>% dplyr::select(c(zn_transform, indus, chas, nox_transform, rm_transform, age_transform, dis_transform, rad, tax, ptratio_transform, lstat_transform, medv))
+predictions <- ifelse(predict(model4, eval_data, type = "link") > 0.5, 1, 0)
+
+df_eval['target'] <- predictions
+write.csv(df_eval, 'eval_predictions.csv', row.names=F)
+predictions
+```
+
+We save the predictions as . csv. File: 'eval predictions.csv'
