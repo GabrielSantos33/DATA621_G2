@@ -565,7 +565,7 @@ We chose the model 4, because it is the model with the best quality:
 Created empty data frame to store transformed variables and performed boxcox transformation after identifying proper lambda:
 
 ```{r, echo=FALSE}
-df_eval <- read.csv("https://raw.githubusercontent.com/GabrielSantos33/DATA621_HW3/main/crime-evaluation-data_modified.csv")
+df_eval <- read.csv("https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/DATA621_HW3/crime-evaluation-data_modified.csv")
 ```
 
 ```{r, echo=FALSE}
