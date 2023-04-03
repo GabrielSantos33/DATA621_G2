@@ -1,0 +1,736 @@
+---
+title: "Data 621 - Draft project"
+author: "Gabriel Santos"
+date: "2023-03-11"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document: default
+
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(kableExtra)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(psych)
+library(caret)
+library(mice)
+library(randomForest)
+library(caTools)
+library(corrplot)
+library(class)
+library(rpart)
+library(rpart.plot)
+library(naniar)
+library(xgboost)
+library(usmap)
+library(DiagrammeR)
+library(earth)
+library(plotly)
+library(wordcloud)
+library(RColorBrewer)
+library(glmnet)
+library(Hmisc)
+library(car)
+```
+
+
+```{r}
+datadict <- read_csv('https://raw.githubusercontent.com/dcorrea614/DATA622/main/FinalProject/data_dictionary.csv')
+
+datadict %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="500px")
+```
+
+```{r}
+states <- read.csv('https://raw.githubusercontent.com/dcorrea614/DATA622/main/FinalProject/states.csv')
+
+names(states) <- c("state_code","state","stateName","stateENS")
+
+states %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="80%",height="300px")
+
+```
+
+```{r}
+dataset <- read_csv('https://raw.githubusercontent.com/dcorrea614/DATA622/main/FinalProject/communities.data.csv')
+head(dataset)%>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="300px")
+
+```
+
+```{r}
+dim(dataset)
+
+```
+
+```{r}
+dataset[dataset == '?'] = NA
+
+summary(dataset)%>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+
+```
+
+```{r}
+dataset_missing_counts <- data.frame(apply(dataset, 2, function(x) length(which(is.na(x)))))
+dataset_missing_pct <- data.frame(apply(dataset, 2,function(x) {sum(is.na(x)) / length(x) * 100}))
+
+dataset_missing_counts <- cbind(Feature = rownames(dataset_missing_counts), dataset_missing_counts, dataset_missing_pct)
+colnames(dataset_missing_counts) <- c('Feature','NA_Count','NA_Percentage')
+rownames(dataset_missing_counts) <- NULL
+
+dataset_missing_counts <- dataset_missing_counts %>% filter(`NA_Count` != 0) %>% arrange(desc(`NA_Count`))
+
+dataset_missing_counts  %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="300px")
+
+```
+
+```{r}
+ggplot(dataset_missing_counts, aes(x = NA_Count, y = reorder(Feature, NA_Count))) + 
+  geom_bar(stat = 'identity', fill = 'steelblue') +
+  geom_label(aes(label = NA_Count)) +
+  labs(title = 'Missing Counts') +
+  theme(plot.title = element_text(hjust = 0.5), axis.title.y = element_blank(), axis.title.x = element_blank())
+
+```
+
+
+
+```{r}
+colremove <- dataset_missing_counts %>%
+  filter(NA_Percentage > 50) %>% 
+  select(Feature) %>%
+  as.list()
+
+dataset <- dataset[,!(colnames(dataset) %in% colremove$Feature)]
+
+
+# removing the folds variable as it was placed for cross validation
+dataset <- dataset[,names(dataset) != 'fold']
+```
+
+```{r}
+# capturing the degenerate variables
+degenCols <- nearZeroVar(dataset)
+
+# identifying them 
+colnames(dataset[,degenCols])
+```
+
+```{r}
+dataset <- dataset[,-degenCols]
+
+```
+
+
+```{r}
+dataset <- dataset %>%
+  mutate(OtherPerCap = as.numeric(OtherPerCap))
+
+#remove missing brand => df3
+dataset <- dataset[!is.na(dataset$OtherPerCap), ]
+
+dim(dataset)
+
+```
+
+
+```{r}
+dataset1 <- left_join(dataset, states, 
+              by = c("state" = "state_code"))
+
+dataset1 <- rename(dataset1, state_abbr = state.y)
+```
+
+
+
+```{r}
+crime_rate_by_state <- dataset1 %>%
+  group_by(state_abbr) %>%
+  summarise(AvgCrimesRate = mean(ViolentCrimesPerPop)) %>% 
+  mutate(rank = dense_rank(desc(AvgCrimesRate)))
+
+crime_rate_by_state %>% filter(rank <=5) %>% arrange(rank) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="60%",height="250px")
+```
+
+
+```{r}
+crime_rate_by_state$hover <- with(crime_rate_by_state, paste(state_abbr,'<br>', "Crime Rank:",rank))
+l <- list(color = toRGB("white"), width = 2)
+g <- list(
+  scope = 'usa',
+  projection = list(type = 'albers usa'),
+  showlakes = TRUE,
+  lakecolor = toRGB('blue')
+)
+
+p <- crime_rate_by_state %>% plot_geo(locationmode = 'USA-states') %>%
+  add_trace(
+    z = ~AvgCrimesRate, text = ~hover, locations = ~state_abbr, 
+    color = ~AvgCrimesRate, colors = 'Blues'
+  ) %>%
+ colorbar(title = "Crime Rate/100K Population") %>%
+  layout(
+    title = 'Violent Crime Rates in the United States',
+    geo = g
+  )
+
+p
+```
+
+
+```{r}
+black_pop_by_state <- dataset1 %>%
+  group_by(state_abbr) %>%
+  summarise(AvgBlackPopRate = mean(racepctblack )) %>% 
+  mutate(rank = dense_rank(desc(AvgBlackPopRate)))
+
+black_pop_by_state %>% filter(rank <=5) %>% arrange(rank) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="60%",height="250px")
+
+```
+
+
+```{r}
+black_pop_by_state$hover <- with(black_pop_by_state, paste(state_abbr,'<br>', "Black Population  Rank:",rank))
+l <- list(color = toRGB("white"), width = 2)
+g <- list(
+  scope = 'usa',
+  projection = list(type = 'albers usa'),
+  showlakes = TRUE,
+  lakecolor = toRGB('blue')
+)
+
+p <- black_pop_by_state %>% plot_geo(locationmode = 'USA-states') %>%
+  add_trace(
+    z = ~AvgBlackPopRate, text = ~hover, locations = ~state_abbr, 
+    color = ~AvgBlackPopRate, colors = 'Greens'
+  ) %>%
+ colorbar(title = "%Black") %>%
+  layout(
+    title = 'Percentage of African-American Population',
+    geo = g
+  )
+p
+```
+
+
+```{r}
+communityCrime <- dataset1 %>% select(communityname,state_abbr, population, ViolentCrimesPerPop) %>% 
+  mutate(Place = paste(communityname,state_abbr, sep = ", ")) %>% 
+  group_by(Place) %>% 
+  summarise(AvgCrimesRate = mean(ViolentCrimesPerPop)) %>% 
+  arrange(desc(AvgCrimesRate)) %>% 
+  head(15)
+
+par(mfrow = c(1,1))
+par(mar = rep(0,4))
+set.seed(1)
+wordcloud(words = communityCrime$Place, freq = communityCrime$AvgCrimesRate, scale=c(3,0.01),
+          random.order=FALSE,
+          colors=brewer.pal(8, "Dark2"))
+```
+
+
+```{r, warning=FALSE}
+dataset <- dataset[,!colnames(dataset) == 'communityname']
+
+#Running a correlation matrix
+res2 <- rcorr(as.matrix(dataset))
+
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut],
+    p = pmat[ut]
+  )
+}
+
+#Finding variables with low correlation to dependent variable
+correlation <- flattenCorrMatrix(res2$r, res2$P)
+correlation <- correlation %>% filter(column == "ViolentCrimesPerPop") %>% arrange(cor)
+remove <- correlation %>% filter(cor >= -0.25 & cor <= 0.25) %>% select(row)
+
+
+low.corr.dep <- c('HispPerCap','PctSpeakEnglOnly','RentMedian','MedRent','RentHighQ','state',
+'OwnOccLowQuart','whitePerCap','OwnOccMedVal','OwnOccHiQuart','AsianPerCap','PctSameHouse85',
+'pctWFarmSelf','PctWorkMom','OtherPerCap','PersPerOwnOccHous','MedYrHousBuilt','pctWRetire',
+'indianPerCap','PctBornSameState','PctEmplProfServ','PctEmplManu','PersPerOccupHous','householdsize','PctWorkMomYoungKids','PctSameState85','PctVacMore6Mos','racePctAsian','MedOwnCostPctIncNoMtg','agePct12t21','MedOwnCostPctInc','agePct65up','PctSameCity85','pctUrban','agePct16t24',
+'pctWSocSec','PersPerFam','agePct12t29','PctUsePubTrans','PctImmigRecent','PctForeignBorn',
+'LandArea','PctImmigRec5','PctRecentImmig','PctRecImmig5','PctImmigRec8','PersPerRentOccHous'
+)
+
+dataset<- dataset %>% select(-low.corr.dep)
+
+dim(dataset)
+```
+
+```{r}
+res2 <- rcorr(as.matrix(dataset))
+correlation <- flattenCorrMatrix(res2$r, res2$P)
+correlation <- correlation %>% mutate(abs_cor = abs(cor)) %>% arrange(desc(abs_cor)) %>% filter(abs_cor > 0.9) %>% select(row, column)
+
+correlation %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="50%",height="200px")
+
+```
+
+
+```{r}
+LR_test <- lm(ViolentCrimesPerPop ~ ., dataset)
+
+vif_df <- data.frame(vif(LR_test)) 
+colnames(vif_df) <- c("VIF_Score")
+
+vif_df %>% arrange(desc(`VIF_Score`)) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="50%",height="200px")
+
+```
+
+
+```{r, warning=FALSE}
+remove.multicollinear <- c('PctRecImmig10', 'population', 'PctFam2Par', 'PctLargHouseOccup', 'FemalePctDiv', 'PctPersOwnOccup', 'medIncome', 'TotalPctDiv', 'PctBSorMore', 'PctNotHSGrad', 'NumUnderPov', 'medFamInc', 'numbUrban', 'PctKids2Par')
+
+dataset <- dataset %>% select(-remove.multicollinear)
+
+dim(dataset)
+```
+
+
+```{r}
+corrMatrix <- round(cor(dataset[,c(1:13,40)]),4)
+corrMatrix %>% corrplot(., method = "color", outline = T, addgrid.col = "darkgray", order="hclust", addrect = 4, rect.col = "black", rect.lwd = 5,cl.pos = "b", tl.col = "indianred4", tl.cex = 1.0, cl.cex = 1.0, addCoef.col = "white", number.digits = 2, number.cex = 0.8, col = colorRampPalette(c("darkred","white","dodgerblue4"))(100))
+```
+
+
+```{r}
+corrMatrix <- round(cor(dataset[,c(14:26,40)]),4)
+corrMatrix %>% corrplot(., method = "color", outline = T, addgrid.col = "darkgray", order="hclust", addrect = 4, rect.col = "black", rect.lwd = 5,cl.pos = "b", tl.col = "indianred4", tl.cex = 1.0, cl.cex = 1.0, addCoef.col = "white", number.digits = 2, number.cex = 0.8, col = colorRampPalette(c("darkred","white","dodgerblue4"))(100))
+```
+
+
+```{r}
+corrMatrix <- round(cor(dataset[,c(27:39,40)]),4)
+corrMatrix %>% corrplot(., method = "color", outline = T, addgrid.col = "darkgray", order="hclust", addrect = 4, rect.col = "black", rect.lwd = 5,cl.pos = "b", tl.col = "indianred4", tl.cex = 1.0, cl.cex = 1.0, addCoef.col = "white", number.digits = 2, number.cex = 0.8, col = colorRampPalette(c("darkred","white","dodgerblue4"))(100))
+```
+
+
+
+```{r}
+sample = sample.split(dataset$ViolentCrimesPerPop, SplitRatio = 0.75)
+
+
+train = subset(dataset, sample == TRUE) %>% as.matrix()
+test = subset(dataset, sample == FALSE) %>% as.matrix()
+
+y_train <- train[,40]
+y_test <- test[,40]
+
+X_train <- train[,-40]
+X_test <- test[,-40]
+```
+
+
+
+```{r}
+printVarImportance <- function(model_name, vImpDF, varNo){
+  # Rename columns
+  varImportance <-  tibble::rownames_to_column(vImpDF, "Variable")
+  colnames(varImportance)[2] <- "Importance"
+  
+  # Limit to Top N important variables 
+  varImportance <- varImportance %>% arrange(desc(`Importance`)) %>% head(varNo)
+  
+  # Create and assign Rank
+  rankImportance <- varImportance %>% mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+  
+  # Plot output
+  ggplot(rankImportance, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat='identity', fill = 'steelblue') +
+  geom_label(aes(label = round(Importance,2))) +
+  geom_text(aes(x = Variable, y = 0.5, label = Rank),
+           hjust=1.2, vjust=0.55, size = 4, colour = 'red') +
+  labs(x = 'Variable') +
+  ggtitle(paste("Variable Importance in ", model_name, " Model")) +
+  coord_flip()
+}
+
+```
+
+
+
+
+```{r}
+fit.ridge <- cv.glmnet(as.matrix(X_train), as.matrix(y_train), alpha = 0, type.measure = "mse", family="gaussian")
+```
+
+
+```{r}
+fitted.ridge.train <- predict(fit.ridge, newx = data.matrix(X_train), s="lambda.min")
+
+
+fitted.ridge.test <- predict(fit.ridge, newx = data.matrix(X_test), s="lambda.min")
+
+cat("Train coefficient: ", cor(as.matrix(y_train), fitted.ridge.train)[1])
+```
+
+
+```{r}
+cat("\nTest coefficient: ", cor(as.matrix(X_test), fitted.ridge.test)[1])
+```
+
+
+```{r}
+ridgePredPerf <- postResample(pred = fitted.ridge.test , obs = y_test)
+ridgePredPerf['Family'] <- 'Linear Regression'
+ridgePredPerf['Model'] <- 'Ridge Regression'
+
+```
+
+
+```{r}
+fit.lasso <- cv.glmnet(as.matrix(X_train), as.matrix(y_train), type.measure="mse", alpha=1, family="gaussian")
+
+
+fitted.lasso.train <- predict(fit.lasso, newx = data.matrix(X_train), s="lambda.min")
+
+fitted.lasso.test <- predict(fit.lasso, newx = data.matrix(X_test), s="lambda.min")
+
+cat("Train coefficient: ", cor(as.matrix(y_train), fitted.lasso.train)[1])
+```
+
+
+```{r}
+cat("\nTest coefficient: ", cor(as.matrix(X_test), fitted.lasso.test)[1])
+```
+
+
+```{r}
+lassoPredPerf <- postResample(pred = fitted.lasso.test , obs = y_test)
+lassoPredPerf['Family'] <- 'Linear Regression'
+lassoPredPerf['Model'] <- 'Lasso Regression'
+
+```
+
+
+```{r}
+fit.elnet <- glmnet(as.matrix(X_train), as.matrix(y_train), family="gaussian", alpha=.5)
+
+fit.elnet.cv <- cv.glmnet(as.matrix(X_train), as.matrix(y_train), type.measure="mse", alpha=.5,
+                          family="gaussian")
+
+fitted.elnet.train <- predict(fit.elnet.cv, newx = data.matrix(X_train), s="lambda.min")
+
+fitted.elnet.test <- predict(fit.elnet.cv, newx = data.matrix(X_test), s="lambda.min")
+
+cat("Train coefficient: ", cor(as.matrix(y_train), fitted.elnet.train)[1])
+```
+
+
+```{r}
+cat("\nTest coefficient: ", cor(as.matrix(X_test), fitted.elnet.test)[1])
+```
+
+
+```{r}
+elnetPredPerf <- postResample(pred = fitted.elnet.test , obs = y_test)
+elnetPredPerf['Family'] <- 'Linear Regression'
+elnetPredPerf['Model'] <- 'Elastic Net Regression'
+```
+
+
+```{r}
+par(mfrow=c(3,1))
+
+plot(fit.lasso, xvar="lambda")
+plot(fit.ridge, xvar="lambda")
+plot(fit.elnet.cv, xvar="lambda")
+```
+
+
+```{r, warning=FALSE}
+nnetAvg <- avNNet(X_train, y_train,
+                  size = 5,
+                  decay = 0.01,
+                  repeats = 5,
+                  linout = TRUE,
+                  trace = FALSE,
+                  maxit = 500,
+                  MaxNWts = 5 * (ncol(X_train) + 1) +5+1)
+nnetAvg
+```
+
+
+```{r}
+varimp <- varImp(nnetAvg)
+varimp %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+```{r}
+printVarImportance("Neural Network", varImp(nnetAvg), 10)
+```
+
+
+```{r}
+nnetPred <- predict(nnetAvg, newdata = X_test)
+nnetPredPerf <- postResample(pred = nnetPred, obs = y_test)
+nnetPredPerf['Family'] <- 'Non-Linear Regression'
+nnetPredPerf['Model'] <- 'Neural Network'
+```
+
+
+```{r}
+knnFit <- train(X_train, y_train,
+                   method = 'knn',
+                   preProc = c('center','scale'),
+                   tuneLength = 14,
+                   trControl = trainControl(method = 'cv'))
+
+knnFit
+```
+
+
+```{r}
+plot(knnFit)
+```
+
+
+```{r}
+varimp <- varImp(knnFit)
+varimp$importance %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+```{r}
+printVarImportance("KNN", varImp(knnFit)$importance, 10)
+```
+
+
+```{r}
+knnPred <- predict(knnFit, newdata = X_test)
+knnPredPerf <- postResample(pred = knnPred, obs = y_test)
+knnPredPerf['Family'] <- 'Non-Linear Regression'
+knnPredPerf['Model'] <- 'KNN'
+```
+
+
+```{r}
+svmRFit <- train(X_train, y_train,
+                   method = 'svmRadial',
+                   preProc = c('center','scale'),
+                   tuneLength = 14,
+                   trControl = trainControl(method = 'cv'))
+svmRFit
+```
+
+
+```{r}
+varimp <- varImp(svmRFit)
+varimp$importance %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+```{r}
+printVarImportance("SVM", varImp(svmRFit)$importance, 10)
+```
+
+
+```{r}
+svmRPred <- predict(svmRFit, newdata = X_test)
+svmRPredPerf <- postResample(pred = svmRPred, obs = y_test)
+svmRPredPerf['Family'] <- 'Non-Linear Regression'
+svmRPredPerf['Model'] <- 'SVM'
+```
+
+
+```{r}
+marsFit <- earth(X_train, y_train)
+summary(marsFit)
+```
+
+
+```{r}
+plotmo(marsFit)
+```
+
+
+```{r}
+
+varimp <- varImp(marsFit)
+varimp %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+```{r}
+printVarImportance("MARS", varImp(marsFit), 10)
+```
+
+
+```{r}
+marsPred <- predict(marsFit, newdata = X_test)
+marsPredPerf <- postResample(pred = marsPred, obs = y_test)
+marsPredPerf['Family'] <- 'Non-Linear Regression'
+marsPredPerf['Model'] <- 'MARS'
+```
+
+
+```{r}
+dt <- rpart(ViolentCrimesPerPop~ ., 
+               data=as.data.frame(train))
+rpart.plot(dt, nn=TRUE)
+```
+
+
+```{r}
+printcp(dt)
+```
+
+
+```{r}
+plotcp(dt)
+```
+
+
+```{r}
+dt$cptable
+```
+
+
+```{r}
+prune_dt=prune(dt,cp=0.0104)
+rpart.plot(prune_dt)
+```
+
+
+```{r}
+test2<-as.data.frame(test)
+test2<- na.omit(test2)
+```
+
+```{r}
+Prune_pred <- predict(prune_dt, 
+                   test2)
+```
+
+```{r}
+confMat <- table(test2$ViolentCrimesPerPop,Prune_pred)
+accuracy <- sum(diag(confMat))/sum(confMat)
+accuracy
+```
+
+```{r}
+confMat <- table(test2$ViolentCrimesPerPop,Prune_pred)
+accuracy <- sum(diag(confMat))/sum(confMat)
+accuracy
+```
+
+```{r}
+dtreePredPerf <- postResample(pred = Prune_pred, obs = y_test)
+dtreePredPerf['Family'] <- 'Trees & Boosting'
+dtreePredPerf['Model'] <- 'Decision Tree'
+```
+
+```{r}
+train2 <- as.data.frame(train)
+```
+
+```{r}
+oob.err=double(9)
+test.err=double(9)
+for (mtry in 1:9){
+  fit=randomForest(ViolentCrimesPerPop~.,data=train2,mtry=mtry,ntree=400, proximity=TRUE)
+ oob.err[mtry]=fit$mse[400]
+ pred=predict(fit, train2)
+ test.err[mtry]=with(train2, mean((ViolentCrimesPerPop-pred)^2))
+ cat(mtry," ")}
+```
+
+```{r}
+matplot(1:mtry,cbind(test.err, oob.err),pch=19, col=c("red", "blue"), type="b",ylab
+="Mean Squared Error")
+legend("topright",legend=c("00B", "Test"),pch=19,col=c("red", "blue"))
+
+```
+
+```{r}
+varImpPlot(fit)
+```
+
+```{r}
+printVarImportance("Random Forest", varImp(fit), 10)
+
+```
+
+```{r}
+print(fit)
+```
+
+```{r}
+rfPredPerf <- postResample(pred = pred, obs = y_test)
+rfPredPerf['Family'] <- 'Trees & Boosting'
+rfPredPerf['Model'] <- 'Random Forest'
+```
+
+```{r}
+gbm_model$bestTune %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+```{r}
+printVarImportance("XGBoost", varImp(gbm_model)$importance, 10)
+```
+
+```{r}
+xgb.plot.tree(model = gbm_model$finalModel,trees = 1:3)
+```
+
+```{r}
+xgbmPred <- predict(gbm_model, newdata = X_test)
+xgbmPredPerf <- postResample(pred = xgbmPred, obs = y_test)
+xgbmPredPerf['Family'] <- 'Trees & Boosting'
+xgbmPredPerf['Model'] <- 'XGBoost'
+```
+
+```{r}
+modelSummaryDF <- rbind(ridgePredPerf, lassoPredPerf, elnetPredPerf, nnetPredPerf, knnPredPerf, svmRPredPerf, marsPredPerf, dtreePredPerf, rfPredPerf, xgbmPredPerf)
+
+SummaryDF <- modelSummaryDF[, c(4, 5, 1, 2, 3)]
+
+rownames(SummaryDF) <- NULL
+
+SummaryDF %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="500px")
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
