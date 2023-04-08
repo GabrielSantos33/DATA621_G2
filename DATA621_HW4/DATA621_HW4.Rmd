@@ -1,0 +1,703 @@
+---
+title: "DATA621_HW4"
+author: "Avery Davidowitz, Gabriel Santos, John Ledesma, Josh Iden, Mathew Katz, Tyler Brown"
+date: "2023-04-07"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+
+```{r, echo=FALSE}
+library(tidyverse)
+require(gridExtra)
+library(Amelia)
+library(kableExtra)
+library(caret)
+library(scales)
+library(purrr)
+library(RColorBrewer)
+library(ROCR)
+library(corrplot)
+```
+
+```{r}
+df <- read.csv("https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/DATA621_HW4/insurance_training_data.csv")
+evaluation <- read.csv("https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/DATA621_HW4/insurance-evaluation-data.csv")
+strip_dollars <- function(x){
+  x <- as.character(x)
+  x <- gsub(",", "", x)
+  x <- gsub("\\$", "", x)
+  as.numeric(x)
+}
+```
+
+# Objetive
+
+The goal is to train a logistic regression classifier to predict whether a person was in a car accident, and to predict the insurance claim cost of the crash.
+
+## Introduction 
+
+We have a dataset with `r nrow(df)` records representing customers of an auto insurance company. Each record has two response variables.
+
+The first response variable is 'TARGET_FLAG' which represents whether a person had an accident (1) or did not have an accident (0). The second response variable is 'TARGET_AMT'.
+
+This value is zero if the person did not crash her car. But if they crashed your car, this number will be a value greater than zero.
+
+TARGET FLAG:
+
+```{r, echo=FALSE, message=FALSE}
+df %>% 
+  mutate(TARGET_FLAG = as.factor(TARGET_FLAG)) %>%
+  ggplot(aes(x=TARGET_FLAG,fill=TARGET_FLAG)) +
+  geom_bar() + scale_y_continuous() + scale_fill_brewer(palette="Dark2") +
+  theme_light() +
+  theme(legend.position = "none") +
+  labs(x="TARGET_FLAG", y="Observations")
+```
+
+
+TARGET AMT:
+
+```{r, echo=FALSE}
+df %>% filter(TARGET_FLAG == 1) %>%
+  ggplot(aes(x=TARGET_AMT)) + 
+  geom_density() +
+  geom_vline(aes(xintercept = mean(TARGET_AMT)), lty=2, col="red") +
+  geom_label(aes(x=mean(TARGET_AMT),y=1,label="mu"),parse=T) +
+  geom_vline(aes(xintercept = median(TARGET_AMT)), lty=2, col="darkblue") +
+  geom_label(aes(x=median(TARGET_AMT),y=.5,label="median")) +
+  scale_x_log10(labels=comma) + theme_light() +
+  labs(title="TARGET_AMT", subtitle="Density Plot", caption="x-axis is log 10 scale",
+       y="Density", x="LOG - TARGET_AMT")
+```
+
+From the graph we can see that the distribution of the 'TARGET_AMT' variable is skewed to the right.
+We thought we could apply the LOG transformation.
+
+# Data 
+
+## Preparation & Exploration
+
+Summary statistics for the data:
+
+```{r, echo=FALSE}
+df %>%
+  glimpse() %>% 
+  summary()
+```
+
+To better observe the data we will use Kable package:
+
+```{r, echo=FALSE}
+df %>%
+  summary() %>%
+  kable() %>%
+  kable_styling()
+```
+
+We can see that there are missing data. There is also data that has outliers, for example negative values in the variable 'CAR_AGE' 
+
+There are values that are represented in currency, we must change them to numerical values.
+
+There are also some invalid data that will be changed to NAs.
+
+```{r, echo=FALSE}
+strip_dollars <- function(x){
+  x <- as.character(x)
+  x <- gsub(",", "", x)
+  x <- gsub("\\$", "", x)
+  as.numeric(x)
+}
+fix_data_types <- function(messy_df){
+  messy_df %>%
+    rowwise() %>%
+    mutate(INCOME = strip_dollars(INCOME),
+           HOME_VAL = strip_dollars(HOME_VAL),
+           BLUEBOOK = strip_dollars(BLUEBOOK),
+           OLDCLAIM = strip_dollars(OLDCLAIM)) %>%
+    ungroup()
+}
+na_bad_values <- function(messy_df){
+  messy_df %>%
+    rowwise() %>%
+    mutate(CAR_AGE = ifelse(CAR_AGE < 0, NA, CAR_AGE))%>%
+    ungroup()
+}
+df$TARGET_FLAG <- factor(df$TARGET_FLAG)
+df <- df %>%
+  fix_data_types() %>%
+  na_bad_values()
+evaluation <- evaluation %>%
+  fix_data_types() %>%
+  na_bad_values()
+```
+
+Summary of the data with the corrected data:
+
+```{r, echo=FALSE}
+df %>%
+  summary() %>%
+  kable() %>%
+  kable_styling()
+```
+
+## Fix Missing Values
+
+```{r, echo=FALSE}
+  sapply(df, function(x) sum(is.na(x))) %>%
+  kable() %>%
+  kable_styling()
+```
+
+
+There are `r nrow(df) - nrow(na.omit(df))`, or `r round(((nrow(df) - nrow(na.omit(df))) / nrow(df)) * 100)`% of the observations missing variables. 
+
+We will fill in the missing data with the median value.
+
+```{r, echo=FALSE}
+df <- df %>% 
+   mutate_at(vars(c("CAR_AGE", "YOJ", "AGE", "INCOME", "HOME_VAL")), ~ifelse(is.na(.), median(., na.rm = TRUE), .))
+df
+```
+
+## Feature Creation
+
+For 'INCOME' and HOME_VAL" we will apply log transformation. We create an average claim amount. We will identify outliers for "TARGET_ATM".
+
+Function to add features:
+
+```{r, echo=FALSE}
+outlier <- min(boxplot(df[df$TARGET_FLAG==1,]$TARGET_AMT, plot=FALSE)$out)
+create_features <- function(d){
+  d %>%
+    mutate(LOG_INCOME = log(INCOME + 1),
+           LOG_HOME_VAL = log(HOME_VAL + 1),
+           AVG_CLAIM = ifelse(CLM_FREQ > 0, OLDCLAIM / CLM_FREQ, 0),
+           PRIOR_ACCIDENT = factor(ifelse(OLDCLAIM == 0 & AVG_CLAIM == 0, 0, 1)),
+           COLLEGE_EDUCATED = factor(ifelse(EDUCATION %in% c("Bachelors", "Masters", "PhD"), 1, 0)),
+           URBAN_DRIVER = factor(ifelse(URBANICITY == "Highly Urban/ Urban", 1, 0)),
+           YOUNG_MALE = factor(ifelse(SEX == "M" & AGE < 25, 1, 0)),
+           YOUNG = factor(ifelse(AGE < 25, 1, 0)),
+           RED_SPORTS_CAR = factor(ifelse(CAR_TYPE == "Sports Car" & RED_CAR == "yes", 1, 0)),
+           HAS_KIDS = factor(ifelse(HOMEKIDS == 0, 0, 1)),
+           KID_DRIVERS = factor(ifelse(KIDSDRIV == 0, 0, 1)),
+           TARGET_AMT_OUTLIER = ifelse(TARGET_AMT < outlier, 0, 1)) %>%
+    select(-URBANICITY)
+}
+df <- create_features(df)
+evaluation <- create_features(evaluation)
+```
+
+# Creating Data Sets (Training/Test)
+
+## For Classifier Model
+
+We will divide the data set into two groups, one for training and another for the test, 70% and 30% respectively. 
+
+```{r, echo=FALSE}
+set.seed(2000)
+train_index <- createDataPartition(df$TARGET_FLAG, p = .7, list = FALSE, times = 1)
+train <- df[train_index,]
+test <- df[-train_index,]
+train
+```
+
+We can see that there are `r nrow(train[train$TARGET_FLAG == 1,])` records of 5714 records in the training data set that have been in an accident.
+
+So that the classifier can correctly identify the records, we will oversample the records that have been involved in an accident.
+
+```{r, echo=FALSE}
+set.seed(2001)
+minority <- nrow(train[train$TARGET_FLAG == 1,])
+majority <- nrow(train[train$TARGET_FLAG == 0,])
+diff <- majority - minority
+minority_index <- train[train$TARGET_FLAG == 1,]$INDEX
+over_sample_train <- data.frame(INDEX = sample(minority_index, diff, TRUE)) %>%
+  merge(train, .) %>%
+bind_rows(train)
+```
+
+The over sampled data frame has `r nrow(over_sample_train)` records.
+
+```{r, echo=FALSE}
+over_sample_train %>% 
+  mutate(TARGET_FLAG = as.factor(TARGET_FLAG)) %>%
+  ggplot(aes(x=TARGET_FLAG, fill=TARGET_FLAG)) +
+  geom_bar() + scale_y_continuous() + scale_fill_brewer(palette="Spectral") +
+  theme_light() +
+  theme(legend.position = "none") +
+  labs(x="TARGET_FLAG", y="Observations")
+over_sample_train$TARGET_FLAG <- factor(over_sample_train$TARGET_FLAG)
+```
+
+We can see that the data is now balanced.
+
+## Linear Regression Model
+
+```{r, echo=FALSE}
+set.seed(2002)
+accidents <- df %>%
+  filter(TARGET_FLAG == 1)
+amt_train_index <- createDataPartition(accidents$TARGET_AMT, p = .7, list = FALSE, times = 1)
+amt_train <- accidents[amt_train_index,]
+amt_test <- accidents[-amt_train_index,]
+```
+
+There are `r nrow(accidents)` accident records in the data set. We will divide the data set into two groups, one for training and another for the test, 70% and 30% respectively.
+
+There are `r nrow(amt_train)` out of `r nrow(accidents)` records in the training data set.
+
+
+## Exploratory Data Analysis
+
+We are going to identify the variables that allow us to classify the data between those who have had an accident and those who have not.
+
+We will identify the variables correlated with the claim amount and then use them as predictors for the linear regression model.
+
+We will examine both training sets.
+
+
+The oversampled classification data set:
+
+```{r, echo=FALSE, fig.height = 10, fig.width = 10}
+plot_vars <- c("TARGET_FLAG", names(keep(over_sample_train, is.numeric)))
+over_sample_train[plot_vars] %>%
+  select(-INDEX, -TARGET_AMT) %>%
+  gather(variable, value, -TARGET_FLAG) %>%
+  ggplot(., aes(TARGET_FLAG, value, color=TARGET_FLAG)) + 
+  geom_boxplot() +
+  scale_color_brewer(palette="Dark2") +
+  theme_light() +
+  theme(legend.position = "none") +
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+```
+
+The 'CLM_FREQ' variable seems to have a difference between the two groups. In general, it does not look different between the groups, whether a person had an accident (1) or did not have an accident (0).
+
+
+Categorically variables in the oversampled classification data set, the following graphs allow to identify if a variable can be used to distinguish those who have had an accident (orange) of those that are not (green)::
+
+```{r, echo=FALSE, fig.height = 6, fig.width = 8}
+plot_vars <- names(keep(over_sample_train, is.factor))
+temp <- over_sample_train[plot_vars] %>%
+  gather(variable, value, -TARGET_FLAG) %>%
+  group_by(TARGET_FLAG, variable, value) %>%
+  tally()
+temp %>%
+  group_by(variable, value) %>%
+  summarise(total = sum(n)) %>%
+  merge(temp,.) %>%
+  mutate(percent = n / total) %>%
+  ggplot(., aes(value, percent, fill=TARGET_FLAG)) + 
+  geom_col() +
+  scale_fill_brewer(palette="Dark2") +
+  theme_light() +
+  theme(legend.position = "none") +
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+```
+
+
+We can see that the 'URBAN_DRIVER' is more likely to have an accident, also the 'YOUNG' and those with a 'PRIOR_ACCIDENT'.
+
+
+We will analyze the distribution of the claims of those who have had an accident:
+
+```{r, echo=FALSE}
+ggplot(amt_train, aes(x=TARGET_AMT)) + 
+  geom_density() +
+  theme_light() +
+  geom_vline(aes(xintercept = mean(TARGET_AMT)), lty=2, col="red") +
+  geom_label(aes(x=25000, y=0.00015, label=paste("mean =", round(mean(TARGET_AMT),0)))) +
+  geom_vline(aes(xintercept = median(TARGET_AMT)), lty=2, col="darkblue") +
+  geom_label(aes(x=25000, y=0.00010, label=paste("median = ", round(median(TARGET_AMT), 0)))) +
+  labs(title="TARGET_AMT", subtitle="Density Plot", y="Density", x="TARGET_AMT")
+```
+
+The distribution is skewed to the left. The mean payout is 5631 dollars, and the median is $4104 dollars.
+The values are high, we can classify them as outliers.
+
+
+```{r, echo=FALSE}
+amt_train %>%
+  mutate(TARGET_AMT_OUTLIER = ifelse(TARGET_AMT_OUTLIER == 1, "Yes", "No")) %>%
+  group_by(TARGET_AMT_OUTLIER) %>%
+  summarise(Mean = mean(TARGET_AMT),
+            Median = median(TARGET_AMT)) %>%
+  kable() %>%
+  kable_styling()
+```
+
+
+We are going to make the correlation and dispersion graphs of the numerical variables, to identify the predictors of the amount of the claim:
+
+
+```{r, echo=FALSE, fig.height = 8, fig.width = 8}
+amt_train %>%
+  keep(is.numeric) %>%
+  gather(variable, value, -TARGET_AMT) %>%
+  ggplot(., aes(value, TARGET_AMT)) + 
+  geom_point(color='darkblue') +
+  scale_color_brewer(palette="Dark2") +
+  theme_light() +
+  theme(legend.position = "none") +
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+```
+
+```{r, echo=FALSE, fig.height = 6, fig.width=6}
+M <- amt_train %>%
+  select(-INDEX) %>%
+  keep(is.numeric) %>%
+  cor(.)
+corrplot(M, type = 'lower', method = 'ellipse', tl.col = 'blue', tl.cex = 0.7)
+```
+
+
+
+```{r, echo=FALSE}
+amt_train %>%
+  keep(is.numeric)%>%
+  select(-INDEX, -TARGET_AMT) %>%
+  cor(., amt_train$TARGET_AMT) %>%
+  kable() %>%
+  kable_styling()
+```
+
+In most of the predictors there is not a strong correlation with the amount of the claim.
+So far we can only choose the outliers that we identify.
+
+Let's look at the categorical variables:
+
+```{r, echo=FALSE}
+plot_vars <- c("TARGET_AMT", "TARGET_AMT_OUTLIER", names(keep(amt_train, is.factor)))
+amt_train[plot_vars] %>% 
+  filter(TARGET_AMT_OUTLIER == 0) %>%
+  gather(variable, value, -TARGET_AMT) %>%
+  ggplot(., aes(value, TARGET_AMT)) + 
+  geom_boxplot(color='darkblue') +
+  theme_light() +
+  theme(legend.position = "none") +
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+```
+
+The previous Boxplot confirms to us that there is no difference in the different groups for the amounts of the claims.
+
+## Analysis
+
+According to the data exploration we have determined that there are no significant variables that allow us to differentiate the data and to be able to determine if there is a variable that affects the results.Possibly the accidents have been generated randomly and there is no variable that directly affects the number of accidents.
+
+In order to predict the amount of the claim, we must carry out a deeper analysis because there are few variables that correlate with the amounts of the claims.
+
+
+# Classification Model 
+
+We will create predictive models and then analyze them.
+
+For the classification modelos utilizaremos el test dataset. 
+
+```{r, echo=FALSE}
+evaluate_model <- function(model, test_df){
+  test_df$yhat <- ifelse(predict.glm(model, test_df, "response") >= 0.5, 1, 0)
+  cm <- confusionMatrix(factor(test_df$yhat), factor(test$TARGET_FLAG), "1")
+  deviance <- model$deviance
+  r2 <- 1 - model$deviance / model$null.deviance
+  
+  cat("F1 =", cm$byClass[7],"\nR2 =", r2, "\n\n")
+  print(cm)
+  
+  eval <- data.frame(actual = test_df$TARGET_FLAG, 
+                     predicted = test_df$yhat, 
+                     prob = predict(model, test_df))
+  pred <- prediction(eval$prob, eval$actual)
+  auc <- performance(pred, measure = "auc")@y.values[[1]]
+  perf <- performance(pred, "tpr", "fpr")
+  plot(perf,main="ROC Curve", sub = paste0("AUC: ", round(auc, 3)))
+  
+  return(cm)
+}
+```
+
+
+## Baseline Model
+
+We will create a simple model to serve as the baseline.  
+
+```{r, echo=FALSE}
+baseline_model <- glm(TARGET_FLAG ~ PRIOR_ACCIDENT, family = binomial(link = "logit"), over_sample_train)
+summary(baseline_model)
+results <- evaluate_model(baseline_model, test)
+```
+
+Drivers history is a representation of their future.Drivers who have been in an accident are more likely to have another accident. Drivers who haven't been in an accident probably won't be in one in the future.
+
+Applying this model to the test data set indicates this simple model has a 65.7% accuracy rate.Correctly recognized 58.7% of the people with accidents and 67.3% of those without. 
+
+Let's see if other models can improve this precision.
+
+
+
+## Risk Taker Model
+
+To use this model, Let's assume that people who take more risks are more likely to have an accident. 
+For this case we assume that young men take more risks.
+
+```{r, echo=FALSE}
+risk_taker_model <- glm(TARGET_FLAG ~ RED_SPORTS_CAR + YOUNG_MALE, family = binomial(link = "logit"), over_sample_train)
+summary(risk_taker_model)
+risk_taker_results <- evaluate_model(risk_taker_model, test)
+```
+
+This model has a 73.5% accuracy rate. The model identified 99.4% of the people who didn't have an accident.The sensitivity of the model is 1.2%, this data means that it correctly identified the people who had an accident. We will not use this model.
+
+
+## Traditional Model
+
+According to the analyzes that one can find of traffic accidents, there are some common predictors, for example, gender, age, accident history.
+We are going to use them in this model. 
+
+
+```{r, echo=FALSE}
+traditional_model <- glm(TARGET_FLAG ~ YOUNG + MSTATUS + PRIOR_ACCIDENT + SEX + REVOKED + MVR_PTS + TRAVTIME + CAR_USE, family = binomial(link = "logit"), over_sample_train)
+summary(traditional_model)
+model_results <- evaluate_model(traditional_model, test)
+```
+
+This model has a 68.3% accuracy rate.  It correcly identified 65.5% of the people with accidents and 69.3% of those without.  
+This model out preforms the baseline model.
+
+
+## Traditional Model with Cross-Validation
+
+So far, the best result has been with the traditional model, we will try to improve the model with the cross-validation technique.
+
+Let's use the original dataset and we are going to use 4 fold cross-validation:
+
+```{r, echo=FALSE}
+cases <- train %>%
+  select(YOUNG,MSTATUS,PRIOR_ACCIDENT,SEX,REVOKED,MVR_PTS,TRAVTIME,CAR_USE) %>%
+  complete.cases()
+temp <- train[cases,]
+train_control <- trainControl(method = "cv", number = 4, sampling = "up")
+traditional_cv <- train(form = TARGET_FLAG ~ YOUNG + MSTATUS + PRIOR_ACCIDENT + SEX + REVOKED + MVR_PTS + TRAVTIME + CAR_USE, method = "glm", family = "binomial", data = temp, trControl = train_control)
+traditional_cv
+```
+Evaluating the model:
+
+```{r, echo=FALSE}
+eval <- data.frame(actual = test$TARGET_FLAG, predicted = predict(traditional_cv,newdata=test,type="raw"), prob = predict(traditional_cv,newdata=test,type="prob"))
+confusionMatrix(eval$predicted, eval$actual, positive = "1")
+pred <- prediction(eval$prob.1, eval$actual)
+auc <- performance(pred, measure = "auc")@y.values[[1]]
+perf <- performance(pred,"tpr","fpr")
+plot(perf,main="ROC Curve", sub=paste0("AUC: ",round(auc,3)))
+```
+
+This model has a 68.2% accuracy rate. It accurately recognized 64% of the people with accidents and 69.7% of those without. It is like the traditional model.
+
+
+## Alternate Traditional Model
+
+This model is an alternate to the traditional model, taking into account other additional values.
+
+```{r,echo=FALSE}
+model <- glm(TARGET_FLAG ~ PRIOR_ACCIDENT + KID_DRIVERS + MSTATUS + INCOME + SEX + CAR_USE + COLLEGE_EDUCATED + REVOKED + URBAN_DRIVER, family = binomial(link = "logit"), over_sample_train)
+summary(model)
+model_results <- evaluate_model(model, test)
+```
+
+This model has a 69.8% accuracy rate. It accurately recognized 77.8% of the people with accidents and 67% of those without.
+
+
+# Claims prediction
+
+## Baseline Model
+
+For this model we will assume that the claim amount is based on the value of the vehicle.
+More expensive vehicles should cost more to repair than less expensive vehicles.
+
+```{r, echo=FALSE}
+baseline_lm <- lm(TARGET_AMT ~ BLUEBOOK, amt_train)
+summary(baseline_lm)
+```
+
+This predictor is statistically significant and positive.
+
+Let's see how it preformed on the test set:
+
+```{r, echo=FALSE}
+data.frame(yhat = predict(baseline_lm, amt_test), actual = amt_test$TARGET_AMT) %>%
+  ggplot(., aes(actual, yhat)) +
+  geom_point(color="darkblue")
+```
+
+## Outlier Model
+
+We are going to use the outliers that we determined earlier.
+
+```{r, echo=FALSE}
+outlier_lm <- lm(TARGET_AMT ~ TARGET_AMT_OUTLIER, amt_train)
+summary(outlier_lm)
+```
+
+This model appears to be incorrect because it predicts outcomes based on a predictor derived from an outcome. It has an adjusted R2 of 0.597.
+
+  
+Let's see how the model preforms on the test set: 
+
+```{r, echo=FALSE}
+temp <- data.frame(yhat = predict(outlier_lm, amt_test), actual = amt_test$TARGET_AMT, TARGET_AMT_OUTLIER = amt_test$TARGET_AMT_OUTLIER) 
+temp %>%
+  ggplot(., aes(actual, yhat, color=as.factor(TARGET_AMT_OUTLIER))) +
+  geom_point() +
+  scale_color_brewer(palette="Dark2") +
+  theme_light() +
+  theme(legend.position = "none") 
+```
+
+```{r, echo=FALSE}
+temp %>%
+  mutate(error = yhat - actual) %>%
+  mutate(`error %` = (error / actual)*100) %>%
+  group_by(TARGET_AMT_OUTLIER) %>%
+  summarise(error = mean(error),
+            `error %` = mean(`error %`)) %>%
+  kable() %>%
+  kable_styling()
+```
+ 
+The prediction is between 35 dolares for the lowest claims and $3300 for the large claims. 
+The error on the is about 51% of the estimate for the small claims and 19% for the large claims. Makes sense.
+
+The table below offers the similar metrics:
+
+```{r, echo=FALSE}
+data.frame(yhat = predict(baseline_lm, amt_test), actual = amt_test$TARGET_AMT, TARGET_AMT_OUTLIER = amt_test$TARGET_AMT_OUTLIER) %>%
+  mutate(error = yhat - actual) %>%
+  mutate(`error %` = (error / actual)*100) %>%
+  group_by(TARGET_AMT_OUTLIER) %>%
+  summarise(error = mean(error),
+            `error %` = mean(`error %`)) %>%
+  kable() %>%
+  kable_styling()
+```
+ 
+We can see that they are outliers.
+
+
+Let's create a classifier with a balanced data set:
+
+```{r, echo=FALSE}
+set.seed(3000)
+minority <- nrow(amt_train[amt_train$TARGET_AMT_OUTLIER == 1,])
+majority <- nrow(amt_train[amt_train$TARGET_AMT_OUTLIER == 0,])
+diff <- majority - minority
+minority_index <- amt_train[amt_train$TARGET_AMT_OUTLIER == 1,]$INDEX
+over_sample_train_2 <- data.frame(INDEX = sample(minority_index, diff, TRUE)) %>%
+  merge(amt_train, .) %>%
+  bind_rows(amt_train)
+```
+
+
+
+```{r, echo=FALSE}
+over_sample_train_2 %>%
+  keep(is.numeric)%>%
+  select(-TARGET_AMT_OUTLIER, -INDEX, -TARGET_AMT) %>%
+  cor(., over_sample_train_2$TARGET_AMT_OUTLIER) %>%
+  kable() %>%
+  kable_styling()
+```
+
+Let's make the correlation graphs:
+
+```{r, echo=FALSE, fig.height = 6, fig.width=6}
+M <- over_sample_train_2 %>%
+  select(-INDEX, -TARGET_AMT) %>%
+  keep(is.numeric) %>%
+  cor(.)
+corrplot(M, type = 'lower', method = 'ellipse', tl.col = 'blue', tl.cex = 0.7)
+```
+
+
+## Urban Model 
+
+Let's filter by URBAN_DRIVER:
+
+```{r, echo=FALSE, fig.height = 6, fig.width=6}
+M <- train %>%
+  filter(TARGET_FLAG == 1) %>%
+  filter(URBAN_DRIVER == 1) %>%
+  purrr::keep(is.numeric) %>%
+  na.omit() %>%
+  cor(.)
+corrplot(M, type = 'lower', method = 'ellipse', tl.col = 'blue', tl.cex = 0.7)
+```
+
+```{r, echo=FALSE}
+urban_fit <- train %>%
+  filter(TARGET_FLAG == 1) %>%
+  filter(URBAN_DRIVER == 1) %>%
+  lm(TARGET_AMT ~ BLUEBOOK, .)
+summary(urban_fit)
+```
+
+
+## Rural Model
+
+Let's filter by RURAL_DRIVER, (URBAN_DRIVER=0):
+
+```{r, echo=FALSE, fig.height = 6, fig.width=6}
+M <- train %>%
+  filter(TARGET_FLAG == 1) %>%
+  filter(URBAN_DRIVER == 0) %>%
+  purrr::keep(is.numeric) %>%
+  na.omit() %>%
+  cor(.)
+corrplot(M, type = 'lower', method = 'ellipse', tl.col = 'blue', tl.cex = 0.7)
+```
+
+```{r, echo=FALSE}
+rural_fit <- train %>%
+  filter(TARGET_FLAG == 1) %>%
+  filter(URBAN_DRIVER == 0) %>%
+  lm(TARGET_AMT ~ BLUEBOOK + CAR_AGE + TRAVTIME, .)
+summary(rural_fit)
+```
+
+
+# Predictions
+
+We assume that everyone with a TARGET_FLAG = 0 has a TARGET_AMT as zero.
+We then refine it with the two linear models:
+
+```{r, echo=FALSE}
+predictions <- function(df, classifier, linear_model_1, linear_model_2){
+  df$TARGET_FLAG <- ifelse(predict.glm(classifier, df, "response") >= 0.5, 1, 0)
+
+  df$model_1_yhat <- predict(linear_model_1, df)
+  df$model_2_yhat <- predict(linear_model_2, df)
+  df <- df %>%
+    mutate(TARGET_AMT = ifelse(URBAN_DRIVER == 1, model_1_yhat, model_2_yhat)) %>%
+    mutate(TARGET_AMT = ifelse(TARGET_FLAG == 0, 0, TARGET_AMT))
+  return(df)
+}
+evaluation <- predictions(evaluation, model, urban_fit, rural_fit)
+evaluation
+```
+
+Let's to predict the estimations values of the evaluation data set. Then we'll write it to csv.
+
+```{r, echo=FALSE}
+write.csv(evaluation, "predictions.csv", row.names = F)
+```
+
