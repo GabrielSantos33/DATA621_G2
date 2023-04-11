@@ -48,7 +48,7 @@ We have a dataset with `r nrow(df)` records representing customers of an auto in
 
 The first response variable is 'TARGET_FLAG' which represents whether a person had an accident (1) or did not have an accident (0). The second response variable is 'TARGET_AMT'.
 
-This value is zero if the person did not crash her car. But if they crashed your car, this number will be a value greater than zero.
+This value is zero if the person did not crash their car. But if they crashed their car, this number will be a value greater than zero.
 
 TARGET FLAG:
 
@@ -394,7 +394,7 @@ The previous Boxplot confirms to us that there is no difference in the different
 
 ## Analysis
 
-According to the data exploration we have determined that there are no significant variables that allow us to differentiate the data and to be able to determine if there is a variable that affects the results.Possibly the accidents have been generated randomly and there is no variable that directly affects the number of accidents.
+According to the data exploration we have determined that there are no significant variables that allow us to differentiate the data and to be able to determine if there is a variable that affects the results. Possibly the accidents have been generated randomly and there is no variable that directly affects the number of accidents.
 
 In order to predict the amount of the claim, we must carry out a deeper analysis because there are few variables that correlate with the amounts of the claims.
 
@@ -403,7 +403,7 @@ In order to predict the amount of the claim, we must carry out a deeper analysis
 
 We will create predictive models and then analyze them.
 
-For the classification modelos utilizaremos el test dataset. 
+For the classification models we use the test data. 
 
 ```{r, echo=FALSE}
 evaluate_model <- function(model, test_df){
@@ -438,7 +438,7 @@ summary(baseline_model)
 results <- evaluate_model(baseline_model, test)
 ```
 
-Drivers history is a representation of their future.Drivers who have been in an accident are more likely to have another accident. Drivers who haven't been in an accident probably won't be in one in the future.
+Drivers history is a representation of their future. Drivers who have been in an accident are more likely to have another accident. Drivers who haven't been in an accident probably won't be in one in the future.
 
 Applying this model to the test data set indicates this simple model has a 65.7% accuracy rate.Correctly recognized 58.7% of the people with accidents and 67.3% of those without. 
 
@@ -532,7 +532,7 @@ summary(baseline_lm)
 
 This predictor is statistically significant and positive.
 
-Let's see how it preformed on the test set:
+Let's see how it performed on the test set:
 
 ```{r, echo=FALSE}
 data.frame(yhat = predict(baseline_lm, amt_test), actual = amt_test$TARGET_AMT) %>%
@@ -575,8 +575,8 @@ temp %>%
   kable_styling()
 ```
  
-The prediction is between 35 dolares for the lowest claims and $3300 for the large claims. 
-The error on the is about 51% of the estimate for the small claims and 19% for the large claims. Makes sense.
+The prediction is between 35 dollars for the lowest claims and $3300 for the large claims. 
+The error on the model is about 51% of the estimate for the small claims and 19% for the large claims. Makes sense.
 
 The table below offers the similar metrics:
 
@@ -695,7 +695,7 @@ evaluation <- predictions(evaluation, model, urban_fit, rural_fit)
 evaluation
 ```
 
-Let's to predict the estimations values of the evaluation data set. Then we'll write it to csv.
+Let's predict the estimations values of the evaluation data set. Then we'll write it to csv.
 
 ```{r, echo=FALSE}
 write.csv(evaluation, "predictions.csv", row.names = F)
