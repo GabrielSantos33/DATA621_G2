@@ -4,9 +4,13 @@ author: "Avery Davidowitz, Gabriel Santos, John Ledesma, Josh Iden, Mathew Katz,
 date: "2023-05-27"
 output:
   rmdformats::readthedown:
-    highlight: kate
     toc_depth: 4
     code_folding: "hide"
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
 ---
 
 # 1. Data Exploration
@@ -57,7 +61,6 @@ This final model was used to predict TARGET values for the test dataset. The res
 
 Import Libraries and Data
 ```{r messages=FALSE, warning=FALSE}
-# load required packages
 library(ggplot2)
 library(dplyr)
 library(corrplot)
@@ -72,9 +75,9 @@ library(xtable)
 
 # Load data
 ```{r import}
-# Loading the data
+
 git_dir <- 'https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/DATA621_HW5'
-#class_data = read.csv(paste(git_dir, "/classification-output-data.csv", sep=""))
+
 train_df = read.csv(paste(git_dir, "/wine-training-data.csv", sep=""))
 test_df = read.csv(paste(git_dir, "/wine-evaluation-data.csv", sep = ""))
 head(train_df, 2)
@@ -84,13 +87,12 @@ head(train_df, 2)
 
 See a summary of each column in the train_df set
 ```{r train_data_summary}
-# view a summary of all columns
 summary(train_df)
 ```
 
 ## Look at the data type of each variable
+### data type of predictors
 ```{r}
-# data type of predictors
 str(train_df)
 ```
 
