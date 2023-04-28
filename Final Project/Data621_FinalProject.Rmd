@@ -1,0 +1,1001 @@
+---
+title: "DATA 621 - Final Project - Crimes in US Communities Analysis"
+author: "Gabriel Santos, Josh Iden, Avery Davidowitz, Mathew Katz, Tyler Brown, John Ledesma"
+date: "2023-05-01"
+always_allow_html: yes
+output:
+  pdf_document: 
+    number_sections: yes
+    toc: yes
+    toc_depth: 5
+  html_document:
+    df_print: kable
+    theme: cerulean
+    highlight: pygments
+    css: ./lab.css
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 5
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Libraries
+
+```{r warning=FALSE, message=FALSE}
+library(kableExtra)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(psych)
+library(caret)
+library(mice)
+library(randomForest)
+library(caTools)
+library(corrplot)
+library(naniar)
+library(xgboost)
+library(usmap)
+library(DiagrammeR)
+library(earth)
+library(plotly)
+library(wordcloud)
+library(RColorBrewer)
+library(glmnet)
+library(Hmisc)
+library(car)
+library(class)
+library(rpart)
+library(rpart.plot)
+```
+
+
+# Abstract
+
+This is a dataset of 2018 US communities, demographics of each community, and their crime rates. The dataset has 146 variables where the first four columns are community/location, the middle features are demographic information about each community such as population, age, race, income, and the final columns are types of crimes and overall crime rates.
+The goal of the project is to understand where violent crime occurs in terms of the socioeconomic and demographic characteristics of the regions. The features can help predict ahead of time where violent crime is likely to occur through predictive models that can quantify the risk associated with a region. 
+
+# Introduction
+
+The approach to the problem of crime in the different states of the United States implies the investigation and analysis of the crime rates in each state, as well as the factors that may be contributing to said rates.One of the factors that has been studied in relation to crime is the socioeconomic level of a community.
+There is evidence to suggest that communities with low socioeconomic levels have a higher incidence of crime compared to more prosperous communities.
+In addition, other socioeconomic factors, such as unemployment, poverty, lack of educational and job opportunities, have also been linked to increased risk of crime. These factors can negatively affect people's quality of life and increase their vulnerability to crime.
+However, it is important to note that other factors can also influence the crime rate, such as culture, law enforcement policies, the availability of guns, and other environmental and demographic factors.
+In summary, socioeconomic factors can be an important factor in the occurrence of crime in different states of the United States, but it is important to consider multiple factors when addressing this complex problem.
+The analysis that we are going to carry out in this work could be useful to build predictive models that better help in urban planning and crime reduction.
+
+# Dataset Overview
+
+The dataset selected for this analysis is 'Crimes in US Communities Dataset' - Michael Bryant (Owner).
+
+We have a very complete dataset. According to each state we can see data such as:
+population for community, percentage of population in 4 age groups, percentage of population according to race, percentage of people using public transit for commuting, and many more data that will allow us to carry out a good analysis.
+
+This is a dataset of 2018 US communities. Numeric-decimal data types have been normalized to two decimal places (0.00).
+Our target variable is 'Violent Crimes by Population', (GOAL attribute).
+Our crime dataset has 128 attributes.
+In the following table we can see the variables, the description of each variable and the data Type.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+datadict <- read_csv('https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/Final%20Project/data_dictionary.csv')
+datadict %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="600px")
+```
+
+
+We also load the data set where each State, State code and State name are described.
+
+
+```{r, echo=FALSE, message=FALSE}
+states <- read.csv('https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/Final%20Project/states.csv')
+names(states) <- c("state_code","state","stateName","stateENS")
+states %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="400px")
+```
+
+In the following table, we can see for each state and community, population. The percentage of population according to age, race, total number of violent crimes per 100K population and other data that may be useful for our analysis.
+
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+dataset <- read_csv('https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/Final%20Project/communities.data.csv')
+head(dataset)%>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="400px")
+```
+
+## Preparation & Exploration
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+dim(dataset)
+```
+
+The dataset has 1994 observations and 128 variable. 
+We can see that there are missing values in the dataset, we are going to convert these data into 'NA' in order to carry out our analysis.
+
+A summary of the variables is below:
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+dataset[dataset == '?'] = NA
+summary(dataset)%>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered","hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+For the variables that have missing values, we will perform the analysis to identify and apply the appropriate imputation technique.
+
+We are going to review how many missing data we have for each attribute.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+dataset_missing_counts <- data.frame(apply(dataset, 2, function(x) length(which(is.na(x)))))
+dataset_missing_pct <- data.frame(apply(dataset, 2,function(x) {sum(is.na(x)) / length(x) * 100}))
+dataset_missing_counts <- cbind(Feature = rownames(dataset_missing_counts), dataset_missing_counts, dataset_missing_pct)
+colnames(dataset_missing_counts) <- c('Feature','NA_Count','NA_Percentage')
+rownames(dataset_missing_counts) <- NULL
+dataset_missing_counts <- dataset_missing_counts %>% filter(`NA_Count` != 0) %>% arrange(desc(`NA_Count`))
+dataset_missing_counts  %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+Let's graph the amount of missing data:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 10, fig.width = 10}
+ggplot(dataset_missing_counts, aes(x = NA_Count, y = reorder(Feature, NA_Count))) + 
+  geom_bar(stat = 'identity', fill = 'lightblue') +
+  geom_label(aes(label = NA_Count)) +
+  labs(title = 'Data missing Counts') +
+  theme(plot.title = element_text(hjust = 0.7), axis.title.y = element_blank(), axis.title.x = element_blank())
+```
+
+
+Reviewing the variables that have missing data, we find that 2 variables have approximately 58.8% of missing data and 22 variables have 84% of missing data.
+We consider that these variables with this amount of missing data are not useful and correct to be used in our analysis.
+
+Removing the folds variable as it was placed for cross validation.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+colremove <- dataset_missing_counts %>%
+  filter(NA_Percentage > 50) %>% 
+  select(Feature) %>%
+  as.list()
+dataset <- dataset[,!(colnames(dataset) %in% colremove$Feature)]
+dataset <- dataset[,names(dataset) != 'fold']
+```
+
+We are going to identify the degenerate variables and remove the degenerate variables from the data set for our analysis.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+degenCols <- nearZeroVar(dataset)
+colnames(dataset[,degenCols])
+dataset <- dataset[,-degenCols]
+```
+
+We are going to eliminate the variable "MottosPctofficDrugUn" - percent of officers assigned to drug units.
+We are also going to remove from the dataset the variable 'OtherPerCap' - per capita income for people with 'other' heritage.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+dataset <- dataset %>%
+mutate(OtherPerCap = as.numeric(OtherPerCap))
+dataset <- dataset[!is.na(dataset$OtherPerCap), ]
+dim(dataset)
+```
+Our dataset now has 102 variables after removing the variables we mentioned above.
+
+
+## Exploratory Data Analysis
+
+Let's join our dataset with the crime dataset by State.
+
+We are going to start with the analysis of the data for our project:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+dataset1 <- left_join(dataset, states, by = c("state" = "state_code"))
+dataset1 <- rename(dataset1, state_abbr = state.y)
+```
+
+### Violent Crime Rate Analysis
+
+To obtain the violent crime rate, we are going to add the average number of violent crimes by State.
+
+In the following table we can see the 10 states with the highest rate of violent crimes:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+crime_rate_by_state <- dataset1 %>%
+  group_by(state_abbr) %>%
+  summarise(AvgCrimesRate = mean(ViolentCrimesPerPop)) %>% 
+  mutate(rank = dense_rank(desc(AvgCrimesRate)))
+crime_rate_by_state %>% filter(rank <=10) %>% arrange(rank) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="400px")
+```
+
+In first place we have the District of Columbia, in second place we have Louisiana and in third place South Carolina.
+
+Violent Crime Rates by States:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height=10, fig.width=10}
+crime_rate_by_state$hover <- with(crime_rate_by_state, paste(state_abbr,'<br>', "Crime Rank:",rank))
+l <- list(color = toRGB("white"), width = 1)
+g <- list(
+  scope = 'usa',
+  projection = list(type = 'albers usa'),
+  showlakes = TRUE,
+  lakecolor = toRGB('lightblue')
+)
+p <- crime_rate_by_state %>% plot_geo(locationmode = 'USA-states') %>%
+  add_trace(
+    z = ~AvgCrimesRate, text = ~hover, locations = ~state_abbr, 
+    color = ~AvgCrimesRate, colors = 'Reds'
+  ) %>%
+ colorbar(title = "Rate") %>%
+  layout(
+    title = 'Violent Crime Rates by States per 100K population',
+    geo = g
+  )
+p
+```
+
+
+### Black population Analysis
+
+
+In the following table we can see the states with the highest percentage of people of the race of African-American population.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+black_pop_by_state <- dataset1 %>%
+  group_by(state_abbr) %>%
+  summarise(AvgBlackPopRate = mean(racepctblack )) %>% 
+  mutate(rank = dense_rank(desc(AvgBlackPopRate)))
+black_pop_by_state %>% filter(rank <=10) %>% arrange(rank) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "bordered", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="400px")
+```
+
+
+In first place we have the District of Columbia, in second place we have Mississippi and in third place Georgia.
+
+Percentage of African-American population by state:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, , fig.height=10, fig.width=10}
+black_pop_by_state$hover <- with(black_pop_by_state, paste(state_abbr,'<br>', "Black Population  Rank:",rank))
+l <- list(color = toRGB("white"), width = 2)
+g <- list(
+  scope = 'usa',
+  projection = list(type = 'albers usa'),
+  showlakes = TRUE,
+  lakecolor = toRGB('lightblue')
+)
+p <- black_pop_by_state %>% plot_geo(locationmode = 'USA-states') %>%
+  add_trace(
+    z = ~AvgBlackPopRate, text = ~hover, locations = ~state_abbr, 
+    color = ~AvgBlackPopRate, colors = 'Blues'
+  ) %>%
+ colorbar(title = "%Black") %>%
+  layout(
+    title = 'Percentage of African-American Population by State',
+    geo = g
+  )
+p
+```
+
+We can see that the District of Columbia ranks first in both crime rate and the percentage of African-American people. We might think that there is a relationship between these two aspects.
+
+The crime rate in a state is not necessarily related to the perception of race based on the percentage of the population of a particular race.While the crime rate may be higher in some urban areas than others, there is no evidence to suggest that the crime rate is related to the race of the population.
+
+It is important to note that the perception of race in the United States has historically been influenced by a variety of factors, including education, the media, and politics. Although crime can be a factor in influencing racial perceptions, it is only one of many factors that can influence how race is perceived in a given area.
+
+### Most dangerous communities
+
+We review which communities have the highest rates of violent crime.
+
+Word Cloud of Communities with the highest crime rates:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, , fig.height=8, fig.width=8}
+communityCrime <- dataset1 %>% select(communityname,state_abbr, population, ViolentCrimesPerPop) %>% 
+  mutate(Place = paste(communityname,state_abbr, sep = ", ")) %>% 
+  group_by(Place) %>% 
+  summarise(AvgCrimesRate = mean(ViolentCrimesPerPop)) %>% 
+  arrange(desc(AvgCrimesRate)) %>% 
+  head(10)
+par(mfrow = c(1,1))
+par(mar = rep(0,4))
+set.seed(800)
+wordcloud(words = communityCrime$Place, freq = communityCrime$AvgCrimesRate, scale=c(3,0.01),
+          random.order=FALSE,
+          colors=brewer.pal(12, "Paired"))
+```
+
+The city of Camdem in the state of New Jersey is the one that occupies the first place with the highest rate of violent crimes. In the top 10 communities with the most violent rates, we have three communities located in the state of Alabama.
+
+
+### Correlation
+
+To select which are the best variables for our analysis, we are going to measure the correlation of each independent variable with the dependent variable and eliminate the variables with low correlation with the independent variable.
+We are going to eliminate the variables with an absolute correlation of less than 0.25 with the independent variable.
+
+Finding variables with low correlation to dependent variable:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+dataset <- dataset[,!colnames(dataset) == 'communityname']
+res2 <- rcorr(as.matrix(dataset))
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut],
+    p = pmat[ut]
+  )
+}
+correlation <- flattenCorrMatrix(res2$r, res2$P)
+correlation <- correlation %>% filter(column == "ViolentCrimesPerPop") %>% arrange(cor)
+remove <- correlation %>% filter(cor >= -0.25 & cor <= 0.25) %>% select(row)
+low.corr.dep <- c('HispPerCap','PctSpeakEnglOnly','RentMedian','MedRent','RentHighQ','state',
+'OwnOccLowQuart','whitePerCap','OwnOccMedVal','OwnOccHiQuart','AsianPerCap','PctSameHouse85',
+'pctWFarmSelf','PctWorkMom','OtherPerCap','PersPerOwnOccHous','MedYrHousBuilt','pctWRetire',
+'indianPerCap','PctBornSameState','PctEmplProfServ','PctEmplManu','PersPerOccupHous','householdsize','PctWorkMomYoungKids','PctSameState85','PctVacMore6Mos','racePctAsian','MedOwnCostPctIncNoMtg','agePct12t21','MedOwnCostPctInc','agePct65up','PctSameCity85','pctUrban','agePct16t24',
+'pctWSocSec','PersPerFam','agePct12t29','PctUsePubTrans','PctImmigRecent','PctForeignBorn',
+'LandArea','PctImmigRec5','PctRecentImmig','PctRecImmig5','PctImmigRec8','PersPerRentOccHous'
+)
+dataset<- dataset %>% select(-low.corr.dep)
+dim(dataset)
+```
+We now have 54 variables.
+
+
+### Multi-collinearity
+
+Let's check for multicollinearity. We selected pairs of independent variables with absolute correlations greater than 0.9.
+
+We are going to use the VIF function to eliminate multicollinear variables that have higher variance inflation factors.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+res2 <- rcorr(as.matrix(dataset))
+correlation <- flattenCorrMatrix(res2$r, res2$P)
+correlation <- correlation %>% mutate(abs_cor = abs(cor)) %>% arrange(desc(abs_cor)) %>% filter(abs_cor > 0.9) %>% select(row, column)
+correlation %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="400px")
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+LR_test <- lm(ViolentCrimesPerPop ~ ., dataset)
+vif_df <- data.frame(vif(LR_test)) 
+colnames(vif_df) <- c("VIF_Score")
+vif_df %>% arrange(desc(`VIF_Score`)) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="400px")
+```
+
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+remove.multicollinear <- c('PctRecImmig10', 'population', 'PctFam2Par', 'PctLargHouseOccup', 'FemalePctDiv', 'PctPersOwnOccup', 'medIncome', 'TotalPctDiv', 'PctBSorMore', 'PctNotHSGrad', 'NumUnderPov', 'medFamInc', 'numbUrban', 'PctKids2Par')
+dataset <- dataset %>% select(-remove.multicollinear)
+dim(dataset)
+```
+
+We now have 40 variables.
+
+
+### Correlation Plots
+
+We are going to create correlation plots to evaluate the most important variables in predicting violent crime rates.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height=10, fig.width=10}
+corrMatrix <- round(cor(dataset[,c(1:19,40)]),4)
+corrMatrix %>% corrplot(.,method="color",   
+         type="lower", order="hclust", 
+         addCoef.col = "black", 
+         tl.col="blue", tl.srt=45, 
+         sig.level = 0.01, insig = "blank", 
+         diag=FALSE, number.cex = 0.8)
+```
+
+
+
+```{r message=FALSE, warning=FALSE, fig.height=10, fig.width=10}
+corrMatrix <- round(cor(dataset[,c(20:39,40)]),4)
+corrMatrix %>% corrplot(.,method="color",   
+         type="lower", order="hclust", 
+         addCoef.col = "black", 
+         tl.col="blue", tl.srt=45, 
+         sig.level = 0.01, insig = "blank", 
+         diag=FALSE, number.cex = 0.8)
+```
+
+
+
+We can observe that some variables influence the rates of violent crimes are:
+
+racepctblack:   percentage of population that is african american
+MalePctDivorce: percentage of males who are divorced
+PctPopUnderPov: percentage of people under the poverty level
+pctWPubAsst:    percentage of households with public assistance income in 1989
+PctUnemployed:  percentage of people 16 and over, in the labor force, and unemployed
+PctLess9thGrade:percentage of people 25 and over with less than a 9th grade education
+PctOccupManu:   percentage of people 16 and over who are employed in manufacturing
+PctHousNoPhone: percent of occupied housing units without phone (in 1990, this was rare!)
+PctHousLess3BR: percent of housing units with less than 3 bedrooms
+
+
+
+### Training and Test Partition of data
+
+Let's partition the training dataset. We will use 75% of the data for training and 25% for validation. 
+
+```{r message=FALSE, warning=FALSE}
+sample = sample.split(dataset$ViolentCrimesPerPop, SplitRatio = 0.75)
+train = subset(dataset, sample == TRUE) %>% as.matrix()
+test = subset(dataset, sample == FALSE) %>% as.matrix()
+y_train <- train[,40]
+y_test <- test[,40]
+X_train <- train[,-40]
+X_test <- test[,-40]
+```
+
+
+## Modeling
+
+
+### Ridge Regression
+
+Ridge regression is a regularization technique used in statistical modeling to address the problem of multicollinearity in data. It is used when there is a high degree of correlation between the independent variables in a multiple linear regression model, which can lead to unstable estimates of model coefficients and unreliable prediction.
+
+Ridge regression works by adding a regularization term to the model's objective function, which penalizes the extreme values of the model's coefficients and reduces their magnitude. This helps to reduce the variance of the model and improve its generalizability to new data.
+
+Now we'll use the glmnet() function to fit the ridge regression model and specify alpha=0.
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1801)
+fit.ridge <- cv.glmnet(as.matrix(X_train), as.matrix(y_train), alpha = 0, type.measure = "mse", family="gaussian")
+```
+
+To identify what value to use for lambda, we'll use the s="lambda.min".
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1802)
+fitted.ridge.train <- predict(fit.ridge, newx = data.matrix(X_train), s="lambda.min")
+fitted.ridge.test <- predict(fit.ridge, newx = data.matrix(X_test), s="lambda.min")
+cat("Train coefficient: ", cor(as.matrix(y_train), fitted.ridge.train)[1])
+cat("\nTest coefficient: ", cor(as.matrix(X_test), fitted.ridge.test)[1])
+```
+
+The train coefficient is 0.816 and test coefficient is 0.778
+
+
+### Prediction Performance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+ridgePredPerf <- postResample(pred = fitted.ridge.test , obs = y_test)
+ridgePredPerf['Family'] <- 'Linear Regression'
+ridgePredPerf['Model'] <- 'Ridge Regression'
+```
+
+
+### LASSO Regression
+
+
+LASSO Regression (Least Absolute Shrinkage and Selection Operator) is another regularization technique used in statistical modeling to address the problem of multicollinearity in data and to perform variable selection.
+
+LASSO regression is used when there are a large number of predictor variables in a multiple linear regression model and you want to reduce the complexity of the model by removing irrelevant or less important variables in predicting the response variable.
+
+LASSO regression reduces the model coefficients to zero for some variables, allowing you to identify the most important variables for prediction. LASSO regression is used in situations where there are a large number of predictor variables and a simpler and more easily interpretable linear regression model is needed, removing less important variables.
+. 
+
+Now we'll use the glmnet() function to fit the LASSO regression model and specify alpha=1.  
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1803)
+fit.lasso <- cv.glmnet(as.matrix(X_train), as.matrix(y_train), type.measure="mse", alpha=1, family="gaussian")
+```
+
+To identify what value to use for lambda, we'll use the s="lambda.min".
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1804)
+fitted.lasso.train <- predict(fit.lasso, newx = data.matrix(X_train), s="lambda.min")
+fitted.lasso.test <- predict(fit.lasso, newx = data.matrix(X_test), s="lambda.min")
+cat("Train coefficient: ", cor(as.matrix(y_train), fitted.lasso.train)[1])
+cat("\nTest coefficient: ", cor(as.matrix(X_test), fitted.lasso.test)[1])
+```
+
+The train coefficient is 0.818 and test coefficient is 0.782
+
+### Prediction Performance
+
+```{r message=FALSE, warning=FALSE}
+lassoPredPerf <- postResample(pred = fitted.lasso.test , obs = y_test)
+lassoPredPerf['Family'] <- 'Linear Regression'
+lassoPredPerf['Model'] <- 'Lasso Regression'
+```
+
+
+### Elastic Net Regression
+
+Elastic Net Regression is used in situations where there is a high correlation between the predictor variables and a more stable linear regression model with variable selection is needed, taking advantage of the properties of Ridge regression and LASSO regression.
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1805)
+fit.elnet <- glmnet(as.matrix(X_train), as.matrix(y_train), family="gaussian", alpha=.5)
+fit.elnet.cv <- cv.glmnet(as.matrix(X_train), as.matrix(y_train), type.measure="mse", alpha=.5,
+                          family="gaussian")
+fitted.elnet.train <- predict(fit.elnet.cv, newx = data.matrix(X_train), s="lambda.min")
+fitted.elnet.test <- predict(fit.elnet.cv, newx = data.matrix(X_test), s="lambda.min")
+cat("Train coefficient: ", cor(as.matrix(y_train), fitted.elnet.train)[1])
+cat("\nTest coefficient: ", cor(as.matrix(X_test), fitted.elnet.test)[1])
+```
+
+The train coefficient is 0.817 and test coefficient is 0.7823
+
+
+### Prediction Performance
+
+```{r  message=FALSE, warning=FALSE, echo=FALSE}
+elnetPredPerf <- postResample(pred = fitted.elnet.test , obs = y_test)
+elnetPredPerf['Family'] <- 'Linear Regression'
+elnetPredPerf['Model'] <- 'Elastic Net Regression'
+```
+
+
+#### Plot MSE
+
+```{r message=FALSE, warning=FALSE,  echo=FALSE, fig.height=5, fig.width=8}
+par(mfrow=c(3,1))
+plot(fit.lasso, xvar="lambda", main = "Lasso Regression")
+plot(fit.ridge, xvar="lambda", main = "Ridge Regression")
+plot(fit.elnet.cv, xvar="lambda", main = "Elastic Net Regression")
+```
+
+
+### Non Linear Regression Model
+
+Nonlinear regression is used when the relationship between the response variable and the predictor variables in a regression model cannot be modeled by a linear function. In this case, a nonlinear function is needed to describe the relationship between the variables.
+
+For this analysis we will use: Neural Networks, KNN (K-Nearest Neighbors), SVM (Support Vector Machines), and MARS (Multivariate Adaptive Regression Splines).
+
+### Neural Networks
+
+Neural Networks consist of layers of artificial neurons that process input information and generate output. Each neuron receives an input, performs a nonlinear transformation, and produces an output that is used as input to the next layer of neurons. The final output of the network is used to predict the output variable.
+
+Let's use Neural network with 4 hidden units:
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1806)
+nnetAvg <- avNNet(X_train, y_train,
+  size = 4,
+  decay = 0.01,
+  repeats = 4,
+  linout = TRUE,
+  trace = FALSE,
+  maxit = 200,
+  MaxNWts = 4 * (ncol(X_train) + 1) +4+1)
+nnetAvg
+```
+
+### Variable Importance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1807)
+varimp <- varImp(nnetAvg)
+varimp %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="400px")
+```
+
+
+```{r message=FALSE, warning=FALSE,  echo=FALSE,  fig.height = 6, fig.width = 8}
+printVarImportance <- function(model_name, vImpDF, varNo)
+{
+  varImportance <-  tibble::rownames_to_column(vImpDF, "Variable")
+  colnames(varImportance)[2] <- "Importance"
+  varImportance <- varImportance %>% arrange(desc(`Importance`)) %>% head(varNo)
+  rankImportance <- varImportance %>% mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+  
+  ggplot(rankImportance, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat='identity', fill = 'lightblue') +
+  geom_label(aes(label = round(Importance,2))) +
+  labs(x = 'Variable') +
+  ggtitle(paste("Variable Importance:", model_name, " Model")) +
+  coord_flip()
+}
+printVarImportance("Neural Network", varImp(nnetAvg), 10)
+```
+
+
+
+### Prediction Performance
+
+```{r  message=FALSE, warning=FALSE, echo=FALSE}
+nnetPred <- predict(nnetAvg, newdata = X_test)
+nnetPredPerf <- postResample(pred = nnetPred, obs = y_test)
+nnetPredPerf['Family'] <- 'Non-Linear Regression'
+nnetPredPerf['Model'] <- 'Neural Network'
+```
+
+### KNN model
+
+
+The KNN model (K-Nearest Neighbors) is used in supervised machine learning for classification and regression. The KNN model is used to predict the class or value of a new data instance based on the characteristics or attributes of the nearest neighboring instances in the training set.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1808)
+knnFit <- train(X_train, y_train,
+    method = 'knn',
+    preProc = c('center','scale'),
+    tuneLength = 10,
+    trControl = trainControl(method = 'cv'))
+knnFit
+```
+
+### KNN Plot
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 8}
+plot(knnFit)
+```
+
+### Variable Importance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1809)
+varimp <- varImp(knnFit)
+varimp$importance %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered","hover", "condensed", "responsive")) %>%   
+  scroll_box(width="100%",height="400px")
+```
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 8}
+printVarImportance <- function(model_name, vImpDF, varNo)
+{
+  varImportance <-  tibble::rownames_to_column(vImpDF, "Variable")
+  colnames(varImportance)[2] <- "Importance"
+  varImportance <- varImportance %>% arrange(desc(`Importance`)) %>% head(varNo)
+  rankImportance <- varImportance %>% mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+  
+  ggplot(rankImportance, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat='identity', fill = 'lightblue') +
+  geom_label(aes(label = round(Importance,2))) +
+  labs(x = 'Variable') +
+  ggtitle(paste("Variable Importance:", model_name, " Model")) +
+  coord_flip()
+}
+printVarImportance("KNN", varImp(knnFit)$importance, 10)
+```
+
+
+### Prediction Performance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+knnPred <- predict(knnFit, newdata = X_test)
+knnPredPerf <- postResample(pred = knnPred, obs = y_test)
+knnPredPerf['Family'] <- 'Non-Linear Regression'
+knnPredPerf['Model'] <- 'KNN'
+```
+
+### SVM model
+
+The SVM model (Support Vector Machine) is used in supervised machine learning for classification and regression. It is particularly useful when the data is linearly or nearly linearly separable in the feature space. It is particularly useful in situations where the data is linearly or nearly linearly separable in feature space, and is very efficient in classifying high-dimensional data and small to medium data sets.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1810)
+svmRFit <- train(X_train, y_train,
+  method = 'svmRadial',
+  preProc = c('center','scale'),
+  tuneLength = 10,
+  trControl = trainControl(method = 'cv'))
+svmRFit
+```
+
+### Variable Importance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1811)
+varimp <- varImp(svmRFit)
+varimp$importance %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 8}
+printVarImportance("SVM", varImp(svmRFit)$importance, 10)
+```
+
+### Prediction Performance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+svmRPred <- predict(svmRFit, newdata = X_test)
+svmRPredPerf <- postResample(pred = svmRPred, obs = y_test)
+svmRPredPerf['Family'] <- 'Non-Linear Regression'
+svmRPredPerf['Model'] <- 'SVM'
+```
+
+### MARS model
+
+The MARS model (Multivariate Adaptive Regression Splines) is used in supervised machine learning for regression and classification. It is a non-parametric technique that uses combinations of simple functions to approximate a complex function.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1812)
+marsFit <- earth(X_train, y_train)
+summary(marsFit)
+```
+
+### MARS plot
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 10, fig.width = 8}
+plotmo(marsFit)
+```
+
+### Variable Importance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1813)
+varimp <- varImp(marsFit)
+varimp %>%
+  arrange(desc(Overall)) %>%
+  kable() %>% kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+
+
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 8}
+printVarImportance("MARS", varImp(marsFit), 10)
+```
+
+### Prediction Performance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+marsPred <- predict(marsFit, newdata = X_test)
+marsPredPerf <- postResample(pred = marsPred, obs = y_test)
+marsPredPerf['Family'] <- 'Non-Linear Regression'
+marsPredPerf['Model'] <- 'MARS'
+```
+
+
+### Decision Tree model
+
+Decision Trees model is used in supervised machine learning for classification and regression. It is a modeling technique that builds a decision tree from training data to predict the label or value of a new data instance. It is useful when the data has non-linear relationships or complex interactions between the input features, and it is very efficient in processing large data sets.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 7, fig.width = 10}
+set.seed(1814)
+dt <- rpart(ViolentCrimesPerPop~ ., 
+    data=as.data.frame(train))
+rpart.plot(dt, nn=TRUE)
+```
+
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+printcp(dt)
+```
+
+we need to use the cross-validation.
+
+
+```{r  message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 10}
+set.seed(1815)
+plotcp(dt)
+dt$cptable
+```
+
+The curve is at its lowest at 6, so we will prune our tree to a size of 6. At size 6, the cp is 0.0118 and error is 0.40.
+
+### Decision Tree No.2
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 10}
+set.seed(1816)
+prune_dt=prune(dt,cp=0.0118)
+rpart.plot(prune_dt)
+```
+
+### Prediction Performance 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+test2<-as.data.frame(test)
+test2<- na.omit(test2)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+Prune_pred <- predict(prune_dt, 
+                   test2)
+```
+
+### Model Accuracy
+
+Model Accuracy is a measure of how well the model fits the training and test data. It is used to evaluate the performance of regression models and to compare different models.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1817)
+confMat <- table(test2$ViolentCrimesPerPop,Prune_pred)
+accuracy <- sum(diag(confMat))/sum(confMat)
+accuracy
+```
+
+The accuracy of the model is low, even after pruning the tree.
+
+
+### Variable Importance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 8}
+printVarImportance("Decision Tree", data.frame(prune_dt$variable.importance), 10)
+```
+
+### Prediction Performance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+dtreePredPerf <- postResample(pred = Prune_pred, obs = y_test)
+dtreePredPerf['Family'] <- 'Trees & Boosting'
+dtreePredPerf['Model'] <- 'Decision Tree'
+```
+
+
+### Random Forest model
+
+Random forests is a supervised machine learning model used for data classification and regression. This model combines multiple decision trees to improve the accuracy of the predictions and reduce overfitting. It is useful when working with large data sets and complex features, you want to avoid overfitting and improve model accuracy.
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1818)
+train2 <- as.data.frame(train)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 5, fig.width = 8}
+oob.err=double(51)
+test.err=double(51)
+for (mtry in 1:51){
+  fit=randomForest(ViolentCrimesPerPop~.,data=train2,mtry=mtry,ntree=200, proximity=TRUE)
+ oob.err[mtry]=fit$mse[200]
+ pred=predict(fit, train2)
+ test.err[mtry]=with(train2, mean((ViolentCrimesPerPop-pred)^2))
+ cat(mtry," ")}
+matplot(1:mtry,cbind(test.err, oob.err),pch=19, col=c("green", "blue"), type="b",ylab
+="Mean Squared Error")
+legend("topright",legend=c("00B", "Test"),pch=19,col=c("green", "blue"))
+```
+
+In this case the test error seems to be greater than the OOB. The out-of-box error and test errors should line up.
+
+### Variable Importance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 8, fig.width = 8}
+set.seed(1819)
+varImpPlot(fit)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 8}
+printVarImportance("Random Forest", varImp(fit), 10)
+```
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+print(fit)
+```
+
+The graphs show us the importance of each variable in predicting violent crime. The mean decrease precision shows how much the precision of the model decreases if we remove the variable. (PctIlleg) percentage of kids born to never married is the most important variable with a very large difference compared to the second variable. 
+
+
+### Prediction Performance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+rfPredPerf <- postResample(pred = pred, obs = y_test)
+rfPredPerf['Family'] <- 'Trees & Boosting'
+rfPredPerf['Model'] <- 'Random Forest'
+ 
+```
+
+### Gradient Boosting Method
+
+The boosting method is a supervised machine learning algorithm used for regression and classification problems. It is an assembly technique that combines multiple weak decision trees to form a stronger and more accurate model.
+
+This algorithm is especially useful in complex data analysis and prediction problems, where high precision and good performance are required. It is suitable for both structured and unstructured data, and can handle a large number of features.
+
+```{r message=FALSE, warning=FALSE, include=FALSE, echo=FALSE}
+set.seed(1820)
+gbm_model <- train(
+  ViolentCrimesPerPop ~., data = train, method = "xgbTree",
+  trControl = trainControl("cv", number = 10)
+  )
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+gbm_model$bestTune %>% kable() %>% kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive"))
+```
+
+
+### Variable Importance
+
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 6, fig.width = 8}
+set.seed(1821)
+printVarImportance("XGBoost", varImp(gbm_model)$importance, 10)
+```
+
+According to the graphs we can see which is the most important variable to predict violent crimes. The most important variable is PctIlleg: percentage of kids born to never married.
+
+
+Let's graph the tree models used.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.height = 12, fig.width = 12}
+xgb.plot.tree(model = gbm_model$finalModel,trees = 1:3)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+xgbmPred <- predict(gbm_model, newdata = X_test)
+xgbmPredPerf <- postResample(pred = xgbmPred, obs = y_test)
+xgbmPredPerf['Family'] <- 'Trees & Boosting'
+xgbmPredPerf['Model'] <- 'XGBoost'
+```
+
+# Summary models
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+modelSummaryDF <- rbind(ridgePredPerf, lassoPredPerf, elnetPredPerf, nnetPredPerf, knnPredPerf, svmRPredPerf, marsPredPerf, dtreePredPerf, rfPredPerf, xgbmPredPerf)
+SummaryDF <- modelSummaryDF[, c(4, 5, 1, 2, 3)]
+rownames(SummaryDF) <- NULL
+SummaryDF %>% kable() %>% kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%",height="500px")
+```
+
+
+Reviewing the table where the summary of all the models we used for our analysis is, we can see the following:
+
+In general, all the models used are good with R2 greater than 60%, except for the simple decision tree model, which has an R2 of approximately 45%, and the random forest model with less than 1%.
+
+We consider that the best model is the SVM model (Support Vector Machine) with RMSE 0.136 and R2 of 64.4%.
+
+
+# Conclusion
+
+Based on the data and data exploration conducted, we were able to analyze a large number of factors simultaneously to understand how the relationships between the different factors affect crime rates in our communities and states.
+
+According to the analysis, we were able to observe that the percentage of children born whose parents were never married is a factor that considerably affects the percentage of violent crimes. While it is true that family structure can have some influence on children's behavior and development, delinquency is a complex problem that has multiple causes and cannot be attributed to a single factor. And while there are other factors such as race that the data suggests could influence the rate of violent crime, crimes may be related to poverty, economic inequality, access to guns, drug and alcohol abuse, discrimination and racism, among other factors.
+
+Therefore, to address the problem of delinquency it is necessary to take into account a wide variety of factors, including but not limited to family structure.
+
+Violent crime is a complex problem that has multiple causes in the United States, some of the possible causes of violent crime in communities are the following:
+
+Socioeconomic inequality: Economic and social inequality can create tensions and conflicts among members of a community, which in turn can lead to violence.
+
+Unemployment: Unemployment can increase despair and hopelessness, which can lead some people to turn to crime to survive.
+
+Poverty: Poverty may be linked to increased violence, as people living in poverty may have less access to resources and opportunities, which can lead to crime.
+
+Drugs and alcohol: Drug and alcohol abuse can increase a person's likelihood of committing a violent crime.
+
+Racism and Discrimination: Racism and discrimination can contribute to violence, especially in communities where there are tensions between different racial or ethnic groups.
+
+It is important to note that these are just a few of the possible causes of violent crime in communities across the United States, and that each case is unique and may have multiple contributing factors. Therefore, it is necessary to address these problems holistically and focus on finding specific solutions for each community. It is important to avoid stigmatizing certain groups in society and instead focus on understanding and addressing the underlying causes of crime so that effective and sustainable action can be taken to reduce it.
+
+
+# References
+
+Resource: https://www.kaggle.com/datasets/michaelbryantds/crimedata?select=crimedata.csv
