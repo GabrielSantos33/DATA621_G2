@@ -1,0 +1,273 @@
+---
+title: "DATA621_HW5"
+author: "Gabriel Santos, Josh Iden, Avery Davidowitz, Mathew Katz, Tyler Brown, John Ledesma"
+date: "2023-05-13"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+```
+
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(corrplot)
+library(MASS)
+library(caret)
+library(pROC)
+library(RCurl)
+library(haven)
+library(xtable)
+library(ggplot2)
+library(kableExtra)
+```
+
+# Objetive
+
+The goal is to build a count regression model to predict the number of cases of wine that will be sold given certain properties of the wine.
+
+
+# Data Exploration
+
+```{r}
+git_dir <- 'https://raw.githubusercontent.com/GabrielSantos33/DATA621_G2/main/DATA621_HW5'
+train_df = read.csv(paste(git_dir, "/wine-training-data.csv", sep=""))
+test_df = read.csv(paste(git_dir, "/wine-evaluation-data.csv", sep =""))
+head(train_df, 5)
+```
+
+Summary statistics for the data:
+
+```{r}
+train_df %>% 
+glimpse() %>% 
+  summary()
+```
+
+To better observe the data we will use Kable package:
+
+```{r}
+train_df %>%
+  summary() %>%
+  kable() %>%
+  kable_styling()
+```
+We can see that there are missing data. There is also data that the variable TARGET has min:0.000 and max:8.000,  with a Median: 3.000, and Mean:3.029
+
+
+
+
+Dataset training:
+
+```{r}
+dim(train_df)
+```
+The training set has 12795 observations and 16 variables. A target variable and 15 predictor's variable. 
+
+Dataset evaluation:
+
+```{r}
+dim(test_df)
+```
+The training set has 3335 observations and 16 variables.
+
+
+Let's graph the TARGET variable (Number of Cases Purchased) :
+
+
+```{r}
+train_df %>%
+        ggplot(aes(x=TARGET)) + geom_bar(stat='count', fill='royalblue4') +
+        scale_y_continuous() + labs(x='TARGET', y='Frecuency', title='Cases Purchased') + 
+        geom_label(stat = "count", aes(label = ..count.., y = ..count..)) + 
+        theme_light() + 
+        theme(axis.title = element_text(size = 10), plot.title = element_text(size = 15,
+        hjust = 0.5), panel.background = element_rect(fill = "white")) +
+        labs(title = "Cases Purchased", y = "Frecuency")
+```
+
+
+Let's graph the variable STARS (Wine rating by a team of experts. 4 Stars = Excellent, 1 Star = Poor):
+
+
+```{r}
+train_df %>%
+        ggplot(aes(x=STARS)) + geom_bar(stat='count', fill='darkred') +
+        scale_y_continuous() + labs(x='STARS', y='Frecuency', title='Wine rating') + 
+        geom_label(stat = "count", aes(label = ..count.., y = ..count..)) + 
+        theme_light() + 
+        theme(axis.title = element_text(size = 10), plot.title = element_text(size = 15,
+        hjust = 0.5), panel.background = element_rect(fill = "white")) +
+        labs(title = "Wine rating", y = "Frecuency")
+```
+
+We can see that most of the wines are classified in 2, regular classification.
+Just 612 wines are classified as excellent.
+
+
+```{r, echo=FALSE}
+ggplot(train_df, aes(Alcohol)) +
+  geom_histogram(fill='darkblue', binwidth=0.3) 
+```
+
+“Alcohol” is right-skewed distributed with some outliers located at right side. The most frequent values are between 9.5-9.8.
+
+
+
+We are going to review how many missing data we have for each attribute:
+
+```{r}
+dataset_missing_counts <- data.frame(apply(train_df, 2, function(x) length(which(is.na(x)))))
+dataset_missing_pct <- data.frame(apply(train_df, 2,function(x) {sum(is.na(x)) / length(x) * 100}))
+dataset_missing_counts <- cbind(Feature = rownames(dataset_missing_counts), dataset_missing_counts, dataset_missing_pct)
+colnames(dataset_missing_counts) <- c('Feature','NA_Count','NA_Percentage')
+rownames(dataset_missing_counts) <- NULL
+dataset_missing_counts <- dataset_missing_counts %>% filter(`NA_Count` != 0) %>% arrange(desc(`NA_Count`))
+dataset_missing_counts  %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover", "condensed", "responsive")) %>% scroll_box(width="100%",height="400px")
+```
+
+
+# Correlation
+
+```{r fig.height=10, fig.width=10}
+train_corr <- train_df %>% 
+  drop_na() %>% 
+  cor()
+kable(sort(train_corr[,1], decreasing = T), col.names = c("Correlation")) %>% 
+  kable_styling()
+corrplot(train_corr, 
+         method = "color", addCoef.col = "black", 
+         type = "lower", diag=FALSE,
+         order="hclust", sig.level = 0.01,
+         insig = "blank",
+         number.cex = .8, tl.cex = .8,
+         tl.col = "blue", tl.srt = 45)
+```
+
+In the correlation table and diagram below, we see that STARS and LabelAppeal are the variables most positively correlated with the TARGET variable.
+
+
+
+
+# Data Preparation
+
+The following are the variables that are missing data in the Training dataset.
+The variable with the most missing data is STARS with 26%.
+
+```{r}
+dataset_missing = names(which(sapply(train_df, anyNA)))
+dataset_missing
+```
+
+Since the STARS variable has a strong correlation with the TARGET variable, we decided to remove the rows where it contained missing data.
+For the rest of the variables, each variable with missing data was replaced by the mean of that variable in the training set.
+
+
+Remove rows where STARS are missing:
+
+```{r}
+train_df <- train_df[complete.cases(train_df$STARS), ]
+```
+
+Remove incomplete rows for testing dataset:
+
+```{r}
+test_df <- test_df[complete.cases(test_df$STARS), ]
+```
+
+Replace NA's with means for rest of variables and check for NA's:
+
+```{r}
+train_df$ResidualSugar[is.na(train_df$ResidualSugar)] <- mean(train_df$ResidualSugar, na.rm = T)
+train_df$Chlorides[is.na(train_df$Chlorides)] <- mean(train_df$Chlorides, na.rm = T)
+train_df$FreeSulfurDioxide[is.na(train_df$FreeSulfurDioxide)] <- mean(train_df$FreeSulfurDioxide, na.rm = T)
+train_df$TotalSulfurDioxide[is.na(train_df$TotalSulfurDioxide)] <- mean(train_df$TotalSulfurDioxide, na.rm = T)
+train_df$pH[is.na(train_df$pH)] <- mean(train_df$pH, na.rm = T)
+train_df$Alcohol[is.na(train_df$Alcohol)] <- mean(train_df$Alcohol, na.rm = T)
+train_df$Sulphates[is.na(train_df$Sulphates)] <- mean(train_df$Sulphates, na.rm = T)
+dataset_missing2 = names(which(sapply(train_df, anyNA)))
+dataset_missing2
+```
+
+
+# Build Models
+
+We are going to use a generalized linear model with Poisson distribution and log function.
+
+Modelo 1: Poisson Regression
+
+```{r}
+model1 <- glm(formula = TARGET ~ FixedAcidity + LabelAppeal +
+                VolatileAcidity + CitricAcid + ResidualSugar +
+                Chlorides + FreeSulfurDioxide + TotalSulfurDioxide +
+                Density + pH + Sulphates + Alcohol + STARS +
+                AcidIndex,
+              family = poisson(link = "log"),
+              data = train_df)
+summary(model1)
+```
+
+The model 1 had a residual deviance of 5836.9 on 9421 degrees of freedom.
+
+
+Model 2: For model 2 we are going to use only the variables that are most significant:
+
+```{r}
+model2 <- glm(formula = TARGET ~ LabelAppeal +
+                VolatileAcidity + Alcohol + STARS +
+                AcidIndex,
+              family = quasipoisson(link = "log"),
+              data = train_df)
+summary(model2)
+```
+
+Model 3: For model 3 we are going to use multiple linear regression
+
+```{r}
+model3 <- lm(formula = TARGET ~ FixedAcidity + LabelAppeal +
+                VolatileAcidity + CitricAcid + ResidualSugar +
+                Chlorides + FreeSulfurDioxide + TotalSulfurDioxide +
+                Density + pH + Sulphates + Alcohol + STARS +
+                AcidIndex,
+              family = poisson(link = "log"),
+              data = train_df)
+summary(model3)
+```
+
+
+# Select Models
+
+To select a model, several iterations and changes were made. In general, all variables with a p value > 0.05 were removed and the distribution was changed from poisson to quasi-poisson. Model 2 was selected.
+
+This final model was used to predict the TARGET values for the test data set.
+
+
+
+# Predict
+
+To make the prediction, we will select model 2.
+
+We believe that the imputed values for missing values did not adequately explain the variation in our data set.
+
+```{r fig.height=6, fig.width=8}
+predict <- predict(model2, newdata=test_df, type = 'response')
+test_df$TARGET <- predict
+p <- hist(test_df$TARGET, ylim = c(0,1000), xlim = c(0, 8), breaks = 8,
+          main="Predict: Wine Purchased - Evaluation Dataset",
+          xlab = "Predicted Cases Purchased",
+          ylab = "Frequency",
+          col = "darkblue")
+text(p$mids,p$counts,labels=p$counts, adj=c(1, -1))
+```
+
+# Conclusion 
+
+According to the count regression model, the prediction of the number of boxes of wines that will be sold was made.
