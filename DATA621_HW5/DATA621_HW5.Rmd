@@ -3,9 +3,9 @@ title: "DATA621_HW5"
 author: "Gabriel Santos, Josh Iden, Avery Davidowitz, Mathew Katz, Tyler Brown, John Ledesma"
 date: "2023-05-13"
 output:
+  pdf_document: default
   html_document:
     df_print: paged
-  pdf_document: default
   word_document: default
 ---
 
